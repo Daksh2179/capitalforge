@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     environment: str = "development"
     database_url: str
 
+    alpaca_api_key: str
+    alpaca_secret_key: str
+    alpaca_base_url: str = "https://paper-api.alpaca.markets"
+
 
 @lru_cache
 def get_settings() -> Settings:
