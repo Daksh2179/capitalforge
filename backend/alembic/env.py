@@ -12,6 +12,7 @@ from app.db.base import Base
 # Alembic's autogenerate diffs against this metadata, so a model that
 # isn't imported here is invisible to migration generation.
 from app.models import strategy  # noqa: F401
+from app.models import decision_log, order, portfolio_snapshot  # noqa: F401
 
 config = context.config
 
