@@ -16,6 +16,7 @@ from app.schemas.strategy import ConditionGroup, RuleCondition, StrategyConfig
 from app.trading_engine.domain.market_bar import MarketBar
 from app.trading_engine.domain.signal import Signal, SignalAction
 from app.trading_engine.indicators.registry import resolve_indicator
+from app.trading_engine.domain.position import Position
 
 
 def evaluate_strategy(bars: list[MarketBar], config: StrategyConfig) -> Signal:
@@ -106,3 +107,44 @@ def _evaluate_rule(bars: list[MarketBar], rule: RuleCondition) -> tuple[bool | N
         raise ValueError(f"Unknown operator: {rule.operator}")
 
     return outcome, description
+
+def evaluate_exit(position: Position, latest_bar: MarketBar, config: StrategyConfig) -> Signal:
+    """Evaluate whether an open position should be closed, based on
+    config.exit's stop_loss_pct / take_profit_pct against the position's
+    entry price. Pure percentage arithmetic, not indicator-based — this
+    is why it's a separate function from evaluate_strategy rather than
+    another branch of the same AND/OR condition evaluation. Always
+    evaluated=True: unlike entry conditions, exit checks need no bar
+    history beyond the latest close, so there's no insufficient-data case.
+    """
+    current_price = latest_bar.close
+    entry_price = position.average_entry_price
+    triggered: list[str] = []
+
+    stop_loss_pct = config.exit.stop_loss_pct
+    if stop_loss_pct is not None:
+        stop_price = entry_price * (1 - stop_loss_pct / 100)
+        if current_price <= stop_price:
+            triggered.append(
+                f"stop_loss triggered: price {current_price} <= {stop_price:.4f} "
+                f"({stop_loss_pct}% below entry {entry_price})"
+            )
+
+    take_profit_pct = config.exit.take_profit_pct
+    if take_profit_pct is not None:
+        target_price = entry_price * (1 + take_profit_pct / 100)
+        if current_price >= target_price:
+            triggered.append(
+                f"take_profit triggered: price {current_price} >= {target_price:.4f} "
+                f"({take_profit_pct}% above entry {entry_price})"
+            )
+
+    action = SignalAction.SELL if triggered else SignalAction.HOLD
+
+    return Signal(
+        symbol=position.symbol,
+        action=action,
+        timestamp=latest_bar.timestamp,
+        evaluated=True,
+        triggered_rules=triggered,
+    )

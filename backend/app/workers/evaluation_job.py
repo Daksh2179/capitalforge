@@ -2,7 +2,7 @@
 strategy, one cycle. Contains no trading decisions, no indicator math,
 no risk logic itself - only calls the components that do, in sequence.
 
-MarketDataProvider -> Rule Evaluator -> Risk Manager -> Broker -> Persistence
+MarketDataProvider -> Rule Evaluator (entry or exit) -> Risk Manager -> Broker -> Persistence
 """
 
 from datetime import datetime, timedelta, timezone
@@ -19,7 +19,7 @@ from app.trading_engine.execution.broker import Broker
 from app.trading_engine.market_data.provider import MarketDataProvider
 from app.trading_engine.risk.risk_limits import RiskLimits
 from app.trading_engine.risk.risk_manager import evaluate_risk
-from app.trading_engine.rules.evaluator import evaluate_strategy
+from app.trading_engine.rules.evaluator import evaluate_exit, evaluate_strategy
 
 # V1 constraint (see docs/decisions.md): strategies operate only on
 # daily bars. This constant is the single place that assumption lives.
@@ -45,16 +45,25 @@ def run_evaluation_cycle(
     if not bars:
         return
 
-    signal = evaluate_strategy(bars, config)
+    portfolio = broker.get_portfolio()
+    existing_position = portfolio.positions.get(config.symbol)
+
+    # V1 constraint: at most one open position per strategy/symbol.
+    # While open, only exits are evaluated; once flat, only entries.
+    if existing_position is not None:
+        signal = evaluate_exit(existing_position, bars[-1], config)
+    else:
+        signal = evaluate_strategy(bars, config)
+
     risk_decision = None
 
-    if signal.action == SignalAction.BUY:
-        portfolio = broker.get_portfolio()
+    if signal.action in (SignalAction.BUY, SignalAction.SELL):
         risk_decision = evaluate_risk(signal, portfolio, config, risk_limits, current_price=bars[-1].close)
 
         if risk_decision.approved and risk_decision.quantity:
+            side = OrderSide.BUY if signal.action == SignalAction.BUY else OrderSide.SELL
             domain_order = broker.place_order(
-                symbol=config.symbol, side=OrderSide.BUY,
+                symbol=config.symbol, side=side,
                 order_type=OrderType.MARKET, quantity=risk_decision.quantity,
             )
             trading_cycle_service.record_order(

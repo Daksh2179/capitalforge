@@ -6,6 +6,8 @@ from app.schemas.strategy import ConditionGroup, ExitRules, PositionSizing, Rule
 from app.trading_engine.domain.market_bar import MarketBar
 from app.trading_engine.domain.signal import SignalAction
 from app.trading_engine.rules.evaluator import evaluate_strategy
+from app.trading_engine.domain.position import Position
+from app.trading_engine.rules.evaluator import evaluate_exit
 
 
 def _bars_from_closes(closes: list[float]) -> list[MarketBar]:
@@ -131,3 +133,44 @@ def test_price_below_operator():
 
     assert signal.evaluated is True
     assert signal.action == SignalAction.BUY
+    
+def test_evaluate_exit_stop_loss_triggers_sell():
+    position = Position(symbol="TEST", quantity=10, average_entry_price=100.0)
+    bar = _bars_from_closes([96.0])[0]  # 4% below entry, stop_loss_pct=3
+    config = _config(
+        ConditionGroup(operator="AND", rules=[RuleCondition(indicator="RSI", period=14, operator="less_than", value=30)])
+    )
+
+    signal = evaluate_exit(position, bar, config)
+
+    assert signal.action == SignalAction.SELL
+    assert any("stop_loss" in r for r in signal.triggered_rules)
+
+
+def test_evaluate_exit_no_trigger_returns_hold():
+    position = Position(symbol="TEST", quantity=10, average_entry_price=100.0)
+    bar = _bars_from_closes([101.0])[0]  # within both thresholds
+    config = _config(
+        ConditionGroup(operator="AND", rules=[RuleCondition(indicator="RSI", period=14, operator="less_than", value=30)])
+    )
+
+    signal = evaluate_exit(position, bar, config)
+
+    assert signal.action == SignalAction.HOLD
+    assert signal.evaluated is True
+    assert signal.triggered_rules == []
+
+
+def test_evaluate_exit_with_no_exit_rules_never_triggers():
+    position = Position(symbol="TEST", quantity=10, average_entry_price=100.0)
+    bar = _bars_from_closes([50.0])[0]  # huge drop, but no exit rules configured
+    config = StrategyConfig(
+        symbol="TEST",
+        conditions=ConditionGroup(operator="AND", rules=[RuleCondition(indicator="RSI", period=14, operator="less_than", value=30)]),
+        position_sizing=PositionSizing(type="fixed_allocation", value_pct=5),
+        exit=ExitRules(stop_loss_pct=None, take_profit_pct=None),
+    )
+
+    signal = evaluate_exit(position, bar, config)
+
+    assert signal.action == SignalAction.HOLD

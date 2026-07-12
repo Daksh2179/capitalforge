@@ -19,10 +19,10 @@ class SimulatedFill:
     price: float
 
 
-def apply_fill(portfolio: Portfolio, fill: SimulatedFill) -> Portfolio:
+def apply_buy_fill(portfolio: Portfolio, fill: SimulatedFill) -> Portfolio:
     """Return a new Portfolio reflecting a simulated buy fill at the
-    given bar's close price. Backtest-only: fills happen instantly at
-    the requested price, with no slippage modeling in this first pass
+    given price. Backtest-only: fills happen instantly at the
+    requested price, with no slippage modeling in this first pass
     — see docs/decisions.md for why this is a known, accepted
     simplification for now, not an oversight.
     """
@@ -49,6 +49,25 @@ def apply_fill(portfolio: Portfolio, fill: SimulatedFill) -> Portfolio:
     )
 
     return Portfolio(cash=new_cash, positions=new_positions)
+
+
+def apply_sell_fill(portfolio: Portfolio, fill: SimulatedFill) -> tuple[Portfolio, float]:
+    """Full-position-close only (V1 constraint — no partial exits).
+    Returns the updated portfolio and the realized P&L from this trade,
+    which is what gives metrics.win_rate_pct its first real caller.
+    """
+    existing = portfolio.positions.get(fill.symbol)
+    if existing is None:
+        raise ValueError(f"Cannot sell {fill.symbol}: no open position")
+
+    proceeds = fill.quantity * fill.price
+    realized_pnl = (fill.price - existing.average_entry_price) * fill.quantity
+
+    new_cash = portfolio.cash + proceeds
+    new_positions = dict(portfolio.positions)
+    del new_positions[fill.symbol]
+
+    return Portfolio(cash=new_cash, positions=new_positions), realized_pnl
 
 
 def mark_to_market(portfolio: Portfolio, bar: MarketBar) -> Portfolio:

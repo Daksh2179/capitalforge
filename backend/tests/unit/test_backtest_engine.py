@@ -113,3 +113,26 @@ def test_backtest_respects_risk_limits():
     )
 
     assert len(result.trades) == 0
+    
+def test_backtest_full_round_trip_produces_trade_pnl():
+    # Decreasing then rising prices: RSI dips low enough to buy, then
+    # price rises enough (take_profit_pct high entry-relative move) to sell.
+    closes = [float(i) for i in range(30, 0, -1)] + [float(i) for i in range(1, 20)]
+    provider = FakeMarketDataProvider(_bars_from_closes(closes))
+    config = StrategyConfig(
+        symbol="TEST",
+        conditions=ConditionGroup(operator="AND", rules=[RuleCondition(indicator="RSI", period=14, operator="less_than", value=30)]),
+        position_sizing=PositionSizing(type="fixed_allocation", value_pct=10),
+        exit=ExitRules(stop_loss_pct=50, take_profit_pct=5),
+    )
+
+    result = run_backtest(
+        provider, config,
+        start=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        end=datetime(2026, 3, 1, tzinfo=timezone.utc),
+        starting_cash=10000.0,
+        risk_limits=RiskLimits(),
+    )
+
+    assert len(result.trades) >= 2
+    assert len(result.trade_pnls) >= 1

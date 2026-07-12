@@ -130,3 +130,37 @@ def test_cash_shortfall_is_caught_by_min_cash_reserve_check():
 
     assert decision.approved is False
     assert "min_cash_reserve_pct" in decision.reason
+    
+def test_sell_signal_with_open_position_is_approved_for_full_quantity():
+    signal = Signal(symbol="AAPL", action=SignalAction.SELL, timestamp=datetime.now(timezone.utc), evaluated=True)
+    portfolio = Portfolio(
+        cash=1000.0,
+        positions={"AAPL": Position(symbol="AAPL", quantity=8, average_entry_price=100.0, current_price=110.0)},
+    )
+
+    decision = evaluate_risk(signal, portfolio, _config(), RiskLimits(), current_price=110.0)
+
+    assert decision.approved is True
+    assert decision.quantity == 8
+
+
+def test_sell_signal_without_position_is_rejected():
+    signal = Signal(symbol="AAPL", action=SignalAction.SELL, timestamp=datetime.now(timezone.utc), evaluated=True)
+    portfolio = Portfolio(cash=1000.0)
+
+    decision = evaluate_risk(signal, portfolio, _config(), RiskLimits(), current_price=110.0)
+
+    assert decision.approved is False
+    assert "no open position" in decision.reason
+
+
+def test_sell_signal_not_evaluated_is_rejected():
+    signal = Signal(symbol="AAPL", action=SignalAction.SELL, timestamp=datetime.now(timezone.utc), evaluated=False)
+    portfolio = Portfolio(
+        cash=1000.0,
+        positions={"AAPL": Position(symbol="AAPL", quantity=8, average_entry_price=100.0)},
+    )
+
+    decision = evaluate_risk(signal, portfolio, _config(), RiskLimits(), current_price=110.0)
+
+    assert decision.approved is False

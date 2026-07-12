@@ -6,12 +6,13 @@ from datetime import datetime, timedelta, timezone
 
 from app.services import strategy_service
 from app.trading_engine.domain.market_bar import MarketBar
-from app.trading_engine.domain.order import Order, OrderStatus
+from app.trading_engine.domain.order import Order, OrderSide, OrderStatus
 from app.trading_engine.domain.portfolio import Portfolio
 from app.trading_engine.execution.broker import Broker
 from app.trading_engine.market_data.provider import MarketDataProvider
 from app.trading_engine.risk.risk_limits import RiskLimits
 from app.workers.evaluation_job import run_evaluation_cycle
+from app.trading_engine.domain.position import Position
 
 
 class FakeMarketDataProvider(MarketDataProvider):
@@ -28,8 +29,8 @@ class FakeMarketDataProvider(MarketDataProvider):
 
 
 class FakeBroker(Broker):
-    def __init__(self, cash: float = 10000.0) -> None:
-        self.portfolio = Portfolio(cash=cash)
+    def __init__(self, cash: float = 10000.0, positions: dict | None = None) -> None:
+        self.portfolio = Portfolio(cash=cash, positions=positions or {})
         self.placed_orders: list = []
 
     def get_portfolio(self) -> Portfolio:
@@ -93,3 +94,18 @@ def test_evaluation_cycle_executes_trade_when_conditions_hold(db_session):
     )
 
     assert len(broker.placed_orders) >= 1
+    
+def test_evaluation_cycle_sells_when_stop_loss_triggered(db_session):
+    strategy = _create_strategy(db_session)
+    market_data = FakeMarketDataProvider([50.0])  # far below any entry price
+    broker = FakeBroker(cash=1000.0, positions={
+        "AAPL": Position(symbol="AAPL", quantity=5, average_entry_price=100.0)
+    })
+
+    run_evaluation_cycle(
+        db_session, strategy=strategy, strategy_version=strategy.current_version,
+        market_data=market_data, broker=broker, risk_limits=RiskLimits(),
+    )
+
+    assert len(broker.placed_orders) == 1
+    assert broker.placed_orders[0].side == OrderSide.SELL

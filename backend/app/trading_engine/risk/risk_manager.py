@@ -30,8 +30,19 @@ def evaluate_risk(
     since Signal doesn't carry price — only the rule outcome. Callers
     (the worker, backtest engine) already have the latest bar on hand.
     """
+    if signal.action == SignalAction.SELL:
+        if not signal.evaluated:
+            return RiskDecision(approved=False, reason="signal was not evaluated (insufficient data)")
+        position = portfolio.positions.get(signal.symbol)
+        if position is None or position.quantity <= 0:
+            return RiskDecision(approved=False, reason="no open position to sell")
+        # Exits only reduce risk exposure, never increase it — no need to
+        # re-check position/deployment/cash-reserve limits here. V1 exits
+        # are always full closes, so quantity is the entire open position.
+        return RiskDecision(approved=True, reason="exit approved", quantity=position.quantity)
+
     if signal.action != SignalAction.BUY:
-        return RiskDecision(approved=False, reason="signal is not a BUY")
+        return RiskDecision(approved=False, reason="signal is not a BUY or SELL")
 
     if not signal.evaluated:
         return RiskDecision(approved=False, reason="signal was not evaluated (insufficient data)")
