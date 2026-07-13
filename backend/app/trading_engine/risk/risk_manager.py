@@ -1,12 +1,12 @@
 """RiskManager: the last gate between a Signal and an actual order.
-Takes a proposed BUY signal plus current portfolio state and either
-approves it (returning a sized quantity) or rejects it with a reason.
-Never overridden by anything upstream — this is unbypassable by design.
+Takes a proposed BUY or SELL signal plus current portfolio state and
+either approves it (returning a sized quantity) or rejects it with a
+reason. Never overridden by anything upstream — unbypassable by design.
 """
 
 from dataclasses import dataclass
 
-from app.schemas.strategy import StrategyConfig
+from app.schemas.strategy import AssetRule
 from app.trading_engine.domain.portfolio import Portfolio
 from app.trading_engine.domain.signal import Signal, SignalAction
 from app.trading_engine.risk.risk_limits import RiskLimits
@@ -22,13 +22,12 @@ class RiskDecision:
 def evaluate_risk(
     signal: Signal,
     portfolio: Portfolio,
-    config: StrategyConfig,
+    rule: AssetRule,
     limits: RiskLimits,
     current_price: float,
 ) -> RiskDecision:
     """current_price is passed explicitly (not read off the signal),
-    since Signal doesn't carry price — only the rule outcome. Callers
-    (the worker, backtest engine) already have the latest bar on hand.
+    since Signal doesn't carry price — only the rule outcome.
     """
     if signal.action == SignalAction.SELL:
         if not signal.evaluated:
@@ -36,9 +35,6 @@ def evaluate_risk(
         position = portfolio.positions.get(signal.symbol)
         if position is None or position.quantity <= 0:
             return RiskDecision(approved=False, reason="no open position to sell")
-        # Exits only reduce risk exposure, never increase it — no need to
-        # re-check position/deployment/cash-reserve limits here. V1 exits
-        # are always full closes, so quantity is the entire open position.
         return RiskDecision(approved=True, reason="exit approved", quantity=position.quantity)
 
     if signal.action != SignalAction.BUY:
@@ -51,7 +47,19 @@ def evaluate_risk(
     if total_value <= 0:
         return RiskDecision(approved=False, reason="portfolio has no value to deploy")
 
-    requested_value = total_value * (config.position_sizing.value_pct / 100)
+    if limits.max_open_positions is not None:
+        already_holds_this_symbol = signal.symbol in portfolio.positions
+        open_count = len(portfolio.positions)
+        if not already_holds_this_symbol and open_count >= limits.max_open_positions:
+            return RiskDecision(
+                approved=False,
+                reason=(
+                    f"opening {signal.symbol} would exceed max_open_positions "
+                    f"limit of {limits.max_open_positions} (currently {open_count} open)"
+                ),
+            )
+
+    requested_value = total_value * (rule.position_sizing.value_pct / 100)
 
     existing_position = portfolio.positions.get(signal.symbol)
     existing_value = existing_position.market_value or 0.0 if existing_position else 0.0

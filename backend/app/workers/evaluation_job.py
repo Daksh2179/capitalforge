@@ -1,6 +1,7 @@
 """Evaluation job: the orchestrator. Coordinates the pipeline for one
-strategy, one cycle. Contains no trading decisions, no indicator math,
-no risk logic itself - only calls the components that do, in sequence.
+Portfolio Strategy, one cycle, looping over every AssetRule inside it.
+Contains no trading decisions, no indicator math, no risk logic itself
+- only calls the components that do, in sequence, once per asset.
 
 MarketDataProvider -> Rule Evaluator (entry or exit) -> Risk Manager -> Broker -> Persistence
 """
@@ -10,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 
 from app.models.strategy import Strategy, StrategyVersion
-from app.schemas.strategy import StrategyConfig
+from app.schemas.strategy import PortfolioRules, StrategyConfig
 from app.services import trading_cycle_service
 from app.trading_engine.domain.order import OrderSide, OrderType
 from app.trading_engine.domain.signal import SignalAction
@@ -27,6 +28,27 @@ V1_SUPPORTED_TIMEFRAME = Timeframe.DAY
 LOOKBACK_DAYS = 60
 
 
+def build_risk_limits(portfolio_rules: PortfolioRules) -> RiskLimits:
+    """Construct RiskLimits from a strategy's PortfolioRules, falling
+    back to engine defaults for any field the user didn't specify.
+    """
+    defaults = RiskLimits()
+    return RiskLimits(
+        max_position_pct=defaults.max_position_pct,
+        max_portfolio_deployment_pct=(
+            (portfolio_rules.max_allocation_pct / 100)
+            if portfolio_rules.max_allocation_pct is not None
+            else defaults.max_portfolio_deployment_pct
+        ),
+        min_cash_reserve_pct=(
+            (portfolio_rules.cash_reserve_pct / 100)
+            if portfolio_rules.cash_reserve_pct is not None
+            else defaults.min_cash_reserve_pct
+        ),
+        max_open_positions=portfolio_rules.max_open_positions,
+    )
+
+
 def run_evaluation_cycle(
     db: Session,
     *,
@@ -34,36 +56,47 @@ def run_evaluation_cycle(
     strategy_version: StrategyVersion,
     market_data: MarketDataProvider,
     broker: Broker,
-    risk_limits: RiskLimits,
 ) -> None:
     config = StrategyConfig.model_validate(strategy_version.config_json)
+    risk_limits = build_risk_limits(config.portfolio_rules)
 
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=LOOKBACK_DAYS)
-    bars = market_data.get_historical_bars(config.symbol, V1_SUPPORTED_TIMEFRAME, start, end)
 
+    for rule in config.asset_rules:
+        _evaluate_one_asset(
+            db, strategy=strategy, strategy_version=strategy_version, rule=rule,
+            market_data=market_data, broker=broker, risk_limits=risk_limits,
+            start=start, end=end,
+        )
+
+
+def _evaluate_one_asset(
+    db: Session, *, strategy: Strategy, strategy_version: StrategyVersion, rule,
+    market_data: MarketDataProvider, broker: Broker, risk_limits: RiskLimits,
+    start: datetime, end: datetime,
+) -> None:
+    bars = market_data.get_historical_bars(rule.symbol, V1_SUPPORTED_TIMEFRAME, start, end)
     if not bars:
         return
 
     portfolio = broker.get_portfolio()
-    existing_position = portfolio.positions.get(config.symbol)
+    existing_position = portfolio.positions.get(rule.symbol)
 
-    # V1 constraint: at most one open position per strategy/symbol.
-    # While open, only exits are evaluated; once flat, only entries.
     if existing_position is not None:
-        signal = evaluate_exit(existing_position, bars[-1], config)
+        signal = evaluate_exit(existing_position, bars, rule)
     else:
-        signal = evaluate_strategy(bars, config)
+        signal = evaluate_strategy(bars, rule)
 
     risk_decision = None
 
     if signal.action in (SignalAction.BUY, SignalAction.SELL):
-        risk_decision = evaluate_risk(signal, portfolio, config, risk_limits, current_price=bars[-1].close)
+        risk_decision = evaluate_risk(signal, portfolio, rule, risk_limits, current_price=bars[-1].close)
 
         if risk_decision.approved and risk_decision.quantity:
             side = OrderSide.BUY if signal.action == SignalAction.BUY else OrderSide.SELL
             domain_order = broker.place_order(
-                symbol=config.symbol, side=side,
+                symbol=rule.symbol, side=side,
                 order_type=OrderType.MARKET, quantity=risk_decision.quantity,
             )
             trading_cycle_service.record_order(

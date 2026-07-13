@@ -1,12 +1,16 @@
-"""Backtest engine: replays a MarketDataProvider's historical bars
-through the same rule evaluator and risk manager used live, one bar at
-a time, tracking portfolio, trades, and realized P&L along the way.
+"""Backtest engine: replays a MarketDataProvider's historical bars for
+one AssetRule through the same rule evaluator and risk manager used
+live, tracking portfolio, trades, and realized P&L along the way.
+
+V1 constraint: operates on a single AssetRule per run. A full
+Portfolio Strategy backtest means calling this once per asset_rule —
+no engine change needed for that, just a usage pattern at the caller.
 """
 
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from app.schemas.strategy import StrategyConfig
+from app.schemas.strategy import AssetRule
 from app.trading_engine.backtest.simulator import (
     SimulatedFill,
     apply_buy_fill,
@@ -33,13 +37,13 @@ class BacktestResult:
 
 def run_backtest(
     provider: MarketDataProvider,
-    config: StrategyConfig,
+    rule: AssetRule,
     start: datetime,
     end: datetime,
     starting_cash: float,
     risk_limits: RiskLimits,
 ) -> BacktestResult:
-    all_bars = provider.get_historical_bars(config.symbol, _config_timeframe(config), start, end)
+    all_bars = provider.get_historical_bars(rule.symbol, Timeframe.DAY, start, end)
 
     portfolio = Portfolio(cash=starting_cash)
     trades: list[SimulatedFill] = []
@@ -51,20 +55,20 @@ def run_backtest(
         current_bar = all_bars[i]
 
         portfolio = mark_to_market(portfolio, current_bar)
-        existing_position = portfolio.positions.get(config.symbol)
+        existing_position = portfolio.positions.get(rule.symbol)
 
         if existing_position is not None:
-            signal = evaluate_exit(existing_position, current_bar, config)
+            signal = evaluate_exit(existing_position, window, rule)
         else:
-            signal = evaluate_strategy(window, config)
+            signal = evaluate_strategy(window, rule)
 
         if signal.action in (SignalAction.BUY, SignalAction.SELL):
             decision = evaluate_risk(
-                signal, portfolio, config, risk_limits, current_price=current_bar.close
+                signal, portfolio, rule, risk_limits, current_price=current_bar.close
             )
             if decision.approved and decision.quantity:
                 fill = SimulatedFill(
-                    symbol=config.symbol, quantity=decision.quantity, price=current_bar.close
+                    symbol=rule.symbol, quantity=decision.quantity, price=current_bar.close
                 )
                 if signal.action == SignalAction.BUY:
                     portfolio = apply_buy_fill(portfolio, fill)
@@ -83,9 +87,3 @@ def run_backtest(
         trade_pnls=trade_pnls,
         equity_curve=equity_curve,
     )
-
-
-def _config_timeframe(config: StrategyConfig) -> Timeframe:
-    # V1 constraint: strategies operate only on daily bars.
-    # StrategyConfig has no timeframe field yet (see docs/decisions.md).
-    return Timeframe.DAY
