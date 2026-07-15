@@ -46,6 +46,13 @@ class LLMClient(LLMService):
 
         return response_model.model_validate(json.loads(content))
 
+    def generate_text(self, messages: list[dict]) -> str:
+        response = self._client.chat.completions.create(model=self._model, messages=messages)  # type: ignore[call-overload, arg-type]
+        content = response.choices[0].message.content
+        if content is None:
+            raise ValueError("Groq returned an empty response with no content")
+        return content
+
 
 def _make_strict_compatible(schema: dict[str, Any]) -> dict[str, Any]:
     """Recursively force every object to additionalProperties: false

@@ -1,7 +1,5 @@
-"""LLMService: the interface TranslationService and other agent
-capabilities depend on. GroqLLMClient (llm_client.py) is the only V1
-implementation — swappable for another provider without touching
-anything that calls generate_structured.
+"""LLMService: the interface every agent capability depends on.
+GroqLLMClient (llm_client.py) is the only V1 implementation.
 """
 
 from abc import ABC, abstractmethod
@@ -17,4 +15,10 @@ class LLMService(ABC):
     def generate_structured(
         self, messages: list[dict], response_model: type[T], schema_name: str
     ) -> T:
+        raise NotImplementedError
+
+    @abstractmethod
+    def generate_text(self, messages: list[dict]) -> str:
+        """Plain chat completion, no schema — for prose explanations
+        where structured output would be the wrong tool."""
         raise NotImplementedError
