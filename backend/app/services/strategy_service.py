@@ -1,6 +1,7 @@
 """Business logic for creating and versioning strategies."""
 
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -13,12 +14,18 @@ def create_strategy(
     user_id: uuid.UUID,
     config_json: dict,
     source: StrategyVersionSource,
+    confirmed_now: bool = False,
 ) -> Strategy:
     """Create a new Strategy along with its first StrategyVersion (version 1).
 
     Both rows are created in the same transaction and current_version_id is
     set before commit, so a Strategy is never left pointing at a version
     that doesn't exist.
+
+    confirmed_now=True stamps StrategyVersion.confirmed_at with the current
+    time, for the one real confirmation moment (Group 6's /agent/confirm
+    endpoint). Manual API creation (Milestone 1's POST /strategies) leaves
+    it None, since that path was never wired to a real confirmation step.
     """
     strategy = Strategy(user_id=user_id, state=StrategyState.DRAFT)
     db.add(strategy)
@@ -29,6 +36,7 @@ def create_strategy(
         version_number=1,
         config_json=config_json,
         source=source,
+        confirmed_at=datetime.now(timezone.utc) if confirmed_now else None,
     )
     db.add(version)
     db.flush()  # assigns version.id, needed to set current_version_id below
@@ -46,6 +54,7 @@ def create_new_version(
     strategy: Strategy,
     config_json: dict,
     source: StrategyVersionSource,
+    confirmed_now: bool = False,
 ) -> StrategyVersion:
     """Create a new StrategyVersion for an existing strategy and repoint
     current_version_id to it. The previous StrategyVersion row is never
@@ -58,6 +67,7 @@ def create_new_version(
         version_number=next_version_number,
         config_json=config_json,
         source=source,
+        confirmed_at=datetime.now(timezone.utc) if confirmed_now else None,
     )
     db.add(version)
     db.flush()
