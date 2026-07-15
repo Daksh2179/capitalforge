@@ -20,11 +20,13 @@ class Settings(BaseSettings):
     alpaca_api_key: str
     alpaca_secret_key: str
     alpaca_base_url: str = "https://paper-api.alpaca.markets"
-
+    groq_api_key: str
+    groq_model: str = "openai/gpt-oss-20b"
 
 @lru_cache
 def get_settings() -> Settings:
     """Return a cached Settings instance.
+    
 
     Cached so the .env file and environment are only read once per process,
     and so FastAPI dependency injection can reuse the same instance via
