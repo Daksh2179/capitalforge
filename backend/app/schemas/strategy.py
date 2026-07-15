@@ -68,7 +68,7 @@ class ConditionGroup(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     operator: Literal["AND", "OR"]
-    rules: list[RuleCondition] = Field(min_length=1)
+    rules: list[RuleCondition] = Field(default_factory=list)
 
 
 class PositionSizing(BaseModel):
@@ -124,7 +124,7 @@ class StrategyConfig(BaseModel):
 
     schema_version: Literal[2] = 2
     portfolio_rules: PortfolioRules
-    asset_rules: list[AssetRule] = Field(min_length=1)
+    asset_rules: list[AssetRule] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _validate_unique_symbols(self) -> "StrategyConfig":
