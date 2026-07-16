@@ -173,3 +173,47 @@ class StrategyResponse(BaseModel):
     current_version_id: uuid.UUID | None
     created_at: datetime
     updated_at: datetime
+    
+class DecisionLogResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    strategy_version_id: uuid.UUID
+    timestamp: datetime
+    market_snapshot_json: dict
+    rules_triggered_json: list
+    action_taken: str
+    risk_approved: bool
+    risk_reason: str
+    explanation_text: str | None
+    created_at: datetime
+
+
+class OrderResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    strategy_version_id: uuid.UUID
+    alpaca_order_id: str
+    symbol: str
+    side: str
+    order_type: str
+    quantity: float
+    status: str
+    limit_price: float | None
+    stop_price: float | None
+    filled_quantity: float
+    filled_avg_price: float | None
+    submitted_at: datetime
+    filled_at: datetime | None
+
+
+class PortfolioSnapshotResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    strategy_id: uuid.UUID
+    timestamp: datetime
+    cash_balance: float
+    positions_json: dict
+    total_value: float

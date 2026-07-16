@@ -98,3 +98,12 @@ def _get_next_version_number(db: Session, *, strategy_id: uuid.UUID) -> int:
         .first()
     )
     return (max_version[0] + 1) if max_version else 1
+
+def list_strategies(db: Session, *, user_id: uuid.UUID) -> list[Strategy]:
+    """List all strategies belonging to one user, newest first."""
+    return (
+        db.query(Strategy)
+        .filter(Strategy.user_id == user_id)
+        .order_by(Strategy.created_at.desc())
+        .all()
+    )

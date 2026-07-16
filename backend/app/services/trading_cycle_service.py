@@ -92,3 +92,38 @@ def record_portfolio_snapshot(
     db.commit()
     db.refresh(snapshot)
     return snapshot
+
+def list_decision_logs(
+    db: Session, *, strategy_version_id: uuid.UUID, limit: int = 50
+) -> list[DecisionLog]:
+    return (
+        db.query(DecisionLog)
+        .filter(DecisionLog.strategy_version_id == strategy_version_id)
+        .order_by(DecisionLog.timestamp.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+def list_orders(
+    db: Session, *, strategy_version_id: uuid.UUID, limit: int = 50
+) -> list[OrderModel]:
+    return (
+        db.query(OrderModel)
+        .filter(OrderModel.strategy_version_id == strategy_version_id)
+        .order_by(OrderModel.submitted_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+def list_portfolio_snapshots(
+    db: Session, *, strategy_id: uuid.UUID, limit: int = 100
+) -> list[PortfolioSnapshot]:
+    return (
+        db.query(PortfolioSnapshot)
+        .filter(PortfolioSnapshot.strategy_id == strategy_id)
+        .order_by(PortfolioSnapshot.timestamp.desc())
+        .limit(limit)
+        .all()
+    )
