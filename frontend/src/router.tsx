@@ -1,22 +1,30 @@
 // Route table
 
-import { createBrowserRouter } from "react-router-dom";
+import { createBrowserRouter, Navigate } from "react-router-dom";
 import { AppLayout } from "@/layouts/AppLayout";
+import { WelcomePage } from "@/pages/WelcomePage";
+import { TradingModePage } from "@/pages/TradingModePage";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { AgentPage } from "@/pages/AgentPage";
 import { ActivityPage } from "@/pages/ActivityPage";
 import { SettingsPage } from "@/pages/SettingsPage";
+import { isOnboardingComplete } from "@/lib/onboarding";
 
-// Onboarding (Welcome -> Trading Mode) is its own implementation group,
-// not built yet. For now the root path renders the layout directly with
-// Dashboard as the index route, so the foundation is independently
-// testable before onboarding exists.
+function RootRedirect() {
+  return isOnboardingComplete() ? (
+    <Navigate to="/dashboard" replace />
+  ) : (
+    <WelcomePage />
+  );
+}
+
 export const router = createBrowserRouter([
+  { path: "/", element: <RootRedirect /> },
+  { path: "/trading-mode", element: <TradingModePage /> },
   {
     path: "/",
     element: <AppLayout />,
     children: [
-      { index: true, element: <DashboardPage /> },
       { path: "dashboard", element: <DashboardPage /> },
       { path: "agent", element: <AgentPage /> },
       { path: "activity", element: <ActivityPage /> },
