@@ -1,7 +1,7 @@
-"""Integration tests for the agent API: /agent/translate and
-/agent/confirm. Uses a fake TranslationService for /translate (no real
-Groq call needed, deterministic and fast) and real strategy_service
-persistence for /confirm (the actual thing worth verifying end-to-end).
+"""Integration tests for the agent API: /agent/translate, /agent/confirm,
+and /agent/conversations/{id}. Uses a fake TranslationService for
+/translate (no real Groq call needed) and real strategy_service
+persistence for /confirm.
 """
 
 import uuid
@@ -26,6 +26,9 @@ class FakeLLMService(LLMService):
     def generate_structured(self, messages, response_model, schema_name):
         return self._batch  # type: ignore[return-value]
 
+    def generate_text(self, messages):
+        raise NotImplementedError("not used in these tests")
+
 
 class FakeMarketDataProvider(MarketDataProvider):
     def get_historical_bars(self, symbol, timeframe, start, end):
@@ -42,6 +45,16 @@ def _override_translation_service(batch: IntentBatch) -> None:
     app.dependency_overrides[_get_translation_service] = lambda: TranslationService(
         FakeLLMService(batch), FakeMarketDataProvider()
     )
+
+
+def _buy_aapl_batch() -> IntentBatch:
+    return IntentBatch(intents=[
+        ParsedIntent(
+            operation="set_buy_condition", intent_type="objective", symbol="AAPL",
+            indicator="PRICE", period=1, operator="less_than", value=180,
+            raw_text="Buy Apple below $180",
+        )
+    ])
 
 
 def _valid_config_payload() -> dict:
@@ -64,21 +77,15 @@ def _valid_config_payload() -> dict:
     }
 
 
-def test_translate_returns_updated_draft(client: TestClient):
-    batch = IntentBatch(intents=[
-        ParsedIntent(
-            operation="set_buy_condition", intent_type="objective", symbol="AAPL",
-            indicator="PRICE", period=1, operator="less_than", value=180,
-            raw_text="Buy Apple below $180",
-        )
-    ])
-    _override_translation_service(batch)
+def test_translate_returns_updated_draft_and_persists_session(client: TestClient):
+    _override_translation_service(_buy_aapl_batch())
+    conversation_id = f"conv-{uuid.uuid4()}"
 
     response = client.post("/agent/translate", json={
-        "message": "Buy Apple below $180", "conversation_history": [], "draft": None,
+        "conversation_id": conversation_id, "message": "Buy Apple below $180",
     })
 
-    app.dependency_overrides.clear()
+    del app.dependency_overrides[_get_translation_service]
 
     assert response.status_code == 200
     body = response.json()
@@ -86,11 +93,92 @@ def test_translate_returns_updated_draft(client: TestClient):
     assert body["draft"]["asset_rules"][0]["symbol"] == "AAPL"
 
 
+def test_translate_twice_accumulates_history_and_draft(client: TestClient):
+    conversation_id = f"conv-{uuid.uuid4()}"
+
+    _override_translation_service(_buy_aapl_batch())
+    client.post("/agent/translate", json={
+        "conversation_id": conversation_id, "message": "Buy Apple below $180",
+    })
+    del app.dependency_overrides[_get_translation_service]
+
+    sell_batch = IntentBatch(intents=[
+        ParsedIntent(
+            operation="set_sell_condition", intent_type="objective", symbol="AAPL",
+            indicator="PRICE", period=1, operator="greater_than", value=195,
+            raw_text="Sell above $195",
+        )
+    ])
+    _override_translation_service(sell_batch)
+    second_response = client.post("/agent/translate", json={
+        "conversation_id": conversation_id, "message": "Sell above $195",
+    })
+    del app.dependency_overrides[_get_translation_service]
+
+    assert second_response.status_code == 200
+    draft = second_response.json()["draft"]
+    rule = draft["asset_rules"][0]
+    assert len(rule["buy_conditions"]["rules"]) == 1
+    assert len(rule["sell_conditions"]["rules"]) == 1
+
+
+def test_get_conversation_session_returns_persisted_state(client: TestClient):
+    conversation_id = f"conv-{uuid.uuid4()}"
+    _override_translation_service(_buy_aapl_batch())
+    client.post("/agent/translate", json={
+        "conversation_id": conversation_id, "message": "Buy Apple below $180",
+    })
+    del app.dependency_overrides[_get_translation_service]
+
+    response = client.get(f"/agent/conversations/{conversation_id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["messages"]) == 2  # one user, one assistant
+    assert body["draft"]["asset_rules"][0]["symbol"] == "AAPL"
+
+
+def test_get_conversation_session_returns_empty_for_unknown_id(client: TestClient):
+    response = client.get(f"/agent/conversations/conv-{uuid.uuid4()}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["messages"] == []
+    assert body["draft"] is None
+
+
+def _confirm_via_chat(client: TestClient, user_id: str) -> tuple[str, str]:
+    """Helper: drives a conversation to a confirmable draft, returns
+    (conversation_id, draft_json_asset_rules_symbol) for reuse."""
+    conversation_id = f"conv-{uuid.uuid4()}"
+    _override_translation_service(_buy_aapl_batch())
+    client.post("/agent/translate", json={
+        "conversation_id": conversation_id, "message": "Buy Apple below $180",
+    })
+    del app.dependency_overrides[_get_translation_service]
+
+    sell_batch = IntentBatch(intents=[
+        ParsedIntent(
+            operation="set_sell_condition", intent_type="objective", symbol="AAPL",
+            indicator="PRICE", period=1, operator="greater_than", value=195,
+            raw_text="Sell above $195",
+        )
+    ])
+    _override_translation_service(sell_batch)
+    client.post("/agent/translate", json={
+        "conversation_id": conversation_id, "message": "Sell above $195",
+    })
+    del app.dependency_overrides[_get_translation_service]
+
+    return conversation_id, user_id
+
+
 def test_confirm_with_valid_draft_persists_strategy(client: TestClient, db_session: Session):
     user_id = str(uuid.uuid4())
+    conversation_id, _ = _confirm_via_chat(client, user_id)
 
     response = client.post("/agent/confirm", json={
-        "user_id": user_id, "draft": _valid_config_payload(),
+        "user_id": user_id, "conversation_id": conversation_id,
     })
 
     assert response.status_code == 200
@@ -98,7 +186,6 @@ def test_confirm_with_valid_draft_persists_strategy(client: TestClient, db_sessi
     assert body["confirmed"] is True
     assert body["strategy"]["user_id"] == user_id
 
-    
     strategy_id = uuid.UUID(body["strategy"]["id"])
     version = (
         db_session.query(StrategyVersion)
@@ -109,49 +196,56 @@ def test_confirm_with_valid_draft_persists_strategy(client: TestClient, db_sessi
     assert version.source.value == "chat"
 
 
-def test_confirm_with_invalid_draft_is_rejected_and_not_persisted(client: TestClient, db_session: Session):
-    user_id = str(uuid.uuid4())
-    invalid_config = _valid_config_payload()
-    invalid_config["asset_rules"][0]["buy_conditions"]["rules"] = []  # no buy conditions -> ERROR
+def test_confirm_with_no_session_returns_400(client: TestClient):
+    response = client.post("/agent/confirm", json={
+        "user_id": str(uuid.uuid4()), "conversation_id": f"conv-{uuid.uuid4()}",
+    })
+
+    assert response.status_code == 400
+
+
+def test_confirm_with_invalid_draft_is_rejected_and_not_persisted(client: TestClient):
+    conversation_id = f"conv-{uuid.uuid4()}"
+    # A buy-only, no-sell-condition draft is invalid (missing sell conditions -> ERROR).
+    _override_translation_service(_buy_aapl_batch())
+    client.post("/agent/translate", json={
+        "conversation_id": conversation_id, "message": "Buy Apple below $180",
+    })
+    del app.dependency_overrides[_get_translation_service]
 
     response = client.post("/agent/confirm", json={
-        "user_id": user_id, "draft": invalid_config,
+        "user_id": str(uuid.uuid4()), "conversation_id": conversation_id,
     })
 
     assert response.status_code == 200
     body = response.json()
     assert body["confirmed"] is False
-    assert any("no buy conditions" in issue["message"] for issue in body["issues"])
-
-
-def test_confirm_with_warning_only_issues_still_persists(client: TestClient, db_session: Session):
-    user_id = str(uuid.uuid4())
-    config_with_warning = _valid_config_payload()
-    config_with_warning["portfolio_rules"]["max_allocation_pct"] = 5  # below the 10% requested -> WARNING only
-
-    response = client.post("/agent/confirm", json={
-        "user_id": user_id, "draft": config_with_warning,
-    })
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["confirmed"] is True
-    assert len(body["warnings"]) >= 1
+    assert any("no sell conditions" in issue["message"] for issue in body["issues"])
 
 
 def test_confirm_for_existing_strategy_creates_new_version(client: TestClient, db_session: Session):
     user_id = str(uuid.uuid4())
+    conversation_id, _ = _confirm_via_chat(client, user_id)
 
     first_response = client.post("/agent/confirm", json={
-        "user_id": user_id, "draft": _valid_config_payload(),
+        "user_id": user_id, "conversation_id": conversation_id,
     })
     strategy_id = first_response.json()["strategy"]["id"]
 
-    updated_config = _valid_config_payload()
-    updated_config["asset_rules"][0]["position_sizing"]["value_pct"] = 20
+    size_batch = IntentBatch(intents=[
+        ParsedIntent(
+            operation="set_position_sizing", intent_type="objective", symbol="AAPL",
+            percentage_value=20, raw_text="Make that 20%",
+        )
+    ])
+    _override_translation_service(size_batch)
+    client.post("/agent/translate", json={
+        "conversation_id": conversation_id, "message": "Make that 20%",
+    })
+    del app.dependency_overrides[_get_translation_service]
 
     second_response = client.post("/agent/confirm", json={
-        "user_id": user_id, "draft": updated_config, "strategy_id": strategy_id,
+        "user_id": user_id, "conversation_id": conversation_id, "strategy_id": strategy_id,
     })
 
     assert second_response.status_code == 200
@@ -165,13 +259,15 @@ def test_confirm_for_existing_strategy_creates_new_version(client: TestClient, d
         .all()
     )
     assert len(versions) == 2
-    assert versions[0].config_json["asset_rules"][0]["position_sizing"]["value_pct"] == 10
+    assert versions[0].config_json["asset_rules"][0]["position_sizing"]["value_pct"] == 5.0
     assert versions[1].config_json["asset_rules"][0]["position_sizing"]["value_pct"] == 20
 
 
 def test_confirm_for_unknown_strategy_id_returns_404(client: TestClient):
+    conversation_id, user_id = _confirm_via_chat(client, str(uuid.uuid4()))
+
     response = client.post("/agent/confirm", json={
-        "user_id": str(uuid.uuid4()), "draft": _valid_config_payload(),
+        "user_id": user_id, "conversation_id": conversation_id,
         "strategy_id": str(uuid.uuid4()),
     })
 

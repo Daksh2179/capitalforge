@@ -12,9 +12,8 @@ from app.schemas.strategy import StrategyConfig, StrategyResponse
 class TranslateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    conversation_id: str
     message: str
-    conversation_history: list[dict] = []
-    draft: StrategyConfig | None = None
 
 
 class TranslateResponse(BaseModel):
@@ -33,7 +32,7 @@ class ConfirmRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     user_id: uuid.UUID
-    draft: StrategyConfig
+    conversation_id: str
     strategy_id: uuid.UUID | None = None
 
 
@@ -54,3 +53,9 @@ class ConfirmAcceptedResponse(BaseModel):
     confirmed: bool = True
     strategy: StrategyResponse
     warnings: list[ValidationIssue] = []
+    
+class ConversationSessionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    messages: list[dict]
+    draft: StrategyConfig | None = None

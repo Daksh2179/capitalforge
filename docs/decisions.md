@@ -526,3 +526,41 @@ Zerodha-adjacent), not AI-demo styling. No gradients-as-AI-signifier,
 robot/brain iconography, circuit-board or hexagon motifs. Lucide icons
 only, chosen per feature, not "AI flavor." No logo/favicon generation —
 placeholder only, final branding deferred.
+
+## Conversation wiring (Phase 4, backend group)
+
+- ConversationStore is keyed by a frontend-generated conversation_id
+  (crypto.randomUUID()), not a backend-owned identifier. A conversation
+  genuinely begins before any Strategy exists — forcing early strategy
+  creation just to hold a conversation would work against the
+  draft-before-confirmation model established in Groups 4-6. Backend
+  still owns all conversation contents, persistence, and lifecycle;
+  only the identifier's origin is client-side.
+- ConversationStore's stored value widened from a bare message list to
+  a ConversationSession {messages, draft}. Restoring a conversation on
+  reload means restoring the working draft too, not just the
+  transcript — otherwise the frontend would have to reconstruct state
+  that already exists on the backend.
+- /agent/translate and /agent/confirm no longer accept draft or
+  conversation_history as request parameters. Both are always loaded
+  from the stored ConversationSession server-side — closes an
+  integrity gap where a client could otherwise assert an arbitrary or
+  stale draft.
+- TranslationService is completely unchanged — confirmed by re-reading
+  its signature before wiring anything. Only who supplies
+  (message, history, draft) changed, not the function itself.
+- FileConversationStore now formally subclasses ConversationStore(ABC),
+  superseding the "structural typing, not a formal subclass" decision
+  from Group 2. That earlier choice caused a genuine mypy failure once
+  a function needed to return ConversationStore as a declared type
+  (api/agent.py's dependency provider) — mypy checks ABC conformance
+  nominally, not structurally. Same pattern now used consistently
+  across every adapter (Broker, MarketDataProvider, LLMService,
+  ConversationStore).
+- Test helper pitfall worth remembering: app.dependency_overrides.clear()
+  wipes every override, including get_db — when a test needs to
+  reset only one dependency override mid-test (e.g. swapping
+  TranslationService between translate calls), use
+  del app.dependency_overrides[specific_dependency] instead, or the
+  next call silently runs against the real dev database instead of
+  the test's isolated transaction.

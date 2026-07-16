@@ -1,12 +1,15 @@
 """Agent API: translation and confirmation endpoints. Thin routers —
-all real logic lives in TranslationService, validate_strategy, and
-strategy_service, exactly per the module design used everywhere else.
+all real logic lives in TranslationService, validate_strategy,
+strategy_service, and ConversationStore.
 """
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.agent.conversation_store import ConversationSession, ConversationStore
+from app.agent.file_conversation_store import FileConversationStore
 from app.agent.llm_client import LLMClient
+from app.agent.translation.translation_result import TranslationResult
 from app.agent.translation.translation_service import TranslationService
 from app.agent.translation.validation import Severity, validate_strategy
 from app.api.deps import get_db
@@ -15,6 +18,7 @@ from app.schemas.agent import (
     ConfirmAcceptedResponse,
     ConfirmRejectedResponse,
     ConfirmRequest,
+    ConversationSessionResponse,
     TranslateRequest,
     TranslateResponse,
 )
@@ -32,21 +36,54 @@ def _get_translation_service() -> TranslationService:
     return TranslationService(llm, market_data)
 
 
+def _get_conversation_store() -> ConversationStore:
+    return FileConversationStore()
+
+
 @router.post("/translate", response_model=TranslateResponse)
 def translate(
     request: TranslateRequest,
     service: TranslationService = Depends(_get_translation_service),
+    store: ConversationStore = Depends(_get_conversation_store),
 ) -> TranslateResponse:
-    result = service.translate(request.message, request.conversation_history, request.draft)
+    session = store.get(request.conversation_id) or ConversationSession()
+
+    result = service.translate(request.message, session.messages, session.draft)
+
+    assistant_content = _summarize_result_for_history(result)
+    updated_session = ConversationSession(
+        messages=[
+            *session.messages,
+            {"role": "user", "content": request.message},
+            {"role": "assistant", "content": assistant_content},
+        ],
+        draft=result.draft,
+    )
+    store.save(request.conversation_id, updated_session)
+
     return TranslateResponse(**result.model_dump())
+
+
+@router.get("/conversations/{conversation_id}", response_model=ConversationSessionResponse)
+def get_conversation_session(
+    conversation_id: str,
+    store: ConversationStore = Depends(_get_conversation_store),
+) -> ConversationSessionResponse:
+    session = store.get(conversation_id) or ConversationSession()
+    return ConversationSessionResponse(messages=session.messages, draft=session.draft)
 
 
 @router.post("/confirm", response_model=ConfirmAcceptedResponse | ConfirmRejectedResponse)
 def confirm(
     request: ConfirmRequest,
     db: Session = Depends(get_db),
+    store: ConversationStore = Depends(_get_conversation_store),
 ) -> ConfirmAcceptedResponse | ConfirmRejectedResponse:
-    issues = validate_strategy(request.draft)
+    session = store.get(request.conversation_id)
+    if session is None or session.draft is None:
+        raise HTTPException(status_code=400, detail="No draft to confirm for this conversation")
+
+    issues = validate_strategy(session.draft)
     blocking = [i for i in issues if i.severity == Severity.ERROR]
 
     if blocking:
@@ -59,13 +96,27 @@ def confirm(
         if strategy is None:
             raise HTTPException(status_code=404, detail="Strategy not found")
         strategy_service.create_new_version(
-            db, strategy=strategy, config_json=request.draft.model_dump(),
+            db, strategy=strategy, config_json=session.draft.model_dump(),
             source=StrategyVersionSource.CHAT, confirmed_now=True,
         )
     else:
         strategy = strategy_service.create_strategy(
-            db, user_id=request.user_id, config_json=request.draft.model_dump(),
+            db, user_id=request.user_id, config_json=session.draft.model_dump(),
             source=StrategyVersionSource.CHAT, confirmed_now=True,
         )
 
     return ConfirmAcceptedResponse(strategy=StrategyResponse.model_validate(strategy), warnings=warnings)
+
+
+def _summarize_result_for_history(result: TranslationResult) -> str:
+    """What the assistant 'said', for the next turn's context — plain
+    text only, never the structured TranslationResult itself."""
+    if result.status.value == "updated_draft":
+        if result.applied_operations:
+            return "; ".join(op.description for op in result.applied_operations)
+        return "Understood."
+    if result.status.value == "needs_clarification":
+        return result.clarification_message or "Could you clarify that?"
+    if result.status.value == "needs_disambiguation":
+        return result.disambiguation_message or "Which asset did you mean?"
+    return result.error_message or "Something went wrong processing that."
