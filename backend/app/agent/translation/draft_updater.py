@@ -84,6 +84,28 @@ def _get_or_create_asset_rule(draft: StrategyConfig | None, symbol: str) -> tupl
     existing = next((r for r in draft.asset_rules if r.symbol == symbol), None) if draft else None
     return (existing or _empty_asset_rule(symbol)), other_rules
 
+def _merge_condition(existing_rules: list, new_condition) -> list:
+    """Replace an existing condition targeting the same
+    (indicator, operator, compare_indicator) combination, or append as
+    a new condition if no match exists. This is what makes "update
+    Apple's buy price to $175" correctly replace the old price
+    threshold instead of accumulating a second, conflicting condition,
+    while still allowing genuinely different conditions (different
+    indicator or operator) to compose together via AND/OR.
+    """
+    key = (new_condition.indicator, new_condition.operator, new_condition.compare_indicator)
+    replaced = False
+    updated = []
+    for existing in existing_rules:
+        existing_key = (existing.indicator, existing.operator, existing.compare_indicator)
+        if existing_key == key:
+            updated.append(new_condition)
+            replaced = True
+        else:
+            updated.append(existing)
+    if not replaced:
+        updated.append(new_condition)
+    return updated
 
 def _apply_asset_fragment(draft: StrategyConfig | None, symbol: str, fragment: IntentFragment) -> UpdateOutcome:
     rule, other_rules = _get_or_create_asset_rule(draft, symbol)
@@ -91,13 +113,13 @@ def _apply_asset_fragment(draft: StrategyConfig | None, symbol: str, fragment: I
 
     if fragment.kind == FragmentKind.BUY_CONDITION:
         assert fragment.condition is not None
-        new_rules = [*rule.buy_conditions.rules, fragment.condition]
+        new_rules = _merge_condition(rule.buy_conditions.rules, fragment.condition)
         rule = rule.model_copy(update={"buy_conditions": rule.buy_conditions.model_copy(update={"rules": new_rules})})
         description = f"Added buy condition for {symbol}: {fragment.raw_text}"
 
     elif fragment.kind == FragmentKind.SELL_CONDITION:
         assert fragment.condition is not None
-        new_rules = [*rule.sell_conditions.rules, fragment.condition]
+        new_rules = _merge_condition(rule.sell_conditions.rules, fragment.condition)
         rule = rule.model_copy(update={"sell_conditions": rule.sell_conditions.model_copy(update={"rules": new_rules})})
         description = f"Added sell condition for {symbol}: {fragment.raw_text}"
 

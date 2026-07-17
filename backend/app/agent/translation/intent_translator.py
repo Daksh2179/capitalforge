@@ -98,20 +98,42 @@ def _build_condition(intent: ParsedIntent) -> RuleCondition:
             f"got indicator={intent.indicator}, operator={intent.operator} for: {intent.raw_text!r}"
         )
 
-    if intent.indicator == "PRICE":
+    indicator = intent.indicator
+    operator = intent.operator
+
+    # PRICE compared against itself via price_above/price_below is not just
+    # nonsensical, it's a real bug: calculate_price returns the bar's own
+    # close, so price_above/price_below with indicator="PRICE" evaluates
+    # latest_close against itself and is always False. This is a lossless,
+    # deterministic correction (not a guess): "PRICE price_below X" and
+    # "PRICE less_than X" mean exactly the same thing, so normalize the
+    # operator rather than reject the intent outright.
+    if indicator == "PRICE" and intent.compare_indicator is None:
+        if operator == "price_below":
+            operator = "less_than"
+        elif operator == "price_above":
+            operator = "greater_than"
+
+    if operator in ("less_than", "greater_than") and intent.value is None and intent.compare_indicator is None:
+        raise ValueError(
+            f"Operator '{operator}' requires either a value or compare_indicator "
+            f"for: {intent.raw_text!r}"
+        )
+
+    if indicator == "PRICE":
         period = 1
     elif intent.period is not None:
         period = intent.period
     else:
         raise ValueError(
             f"set_buy_condition/set_sell_condition requires period for indicator "
-            f"'{intent.indicator}' (only PRICE can omit it): {intent.raw_text!r}"
+            f"'{indicator}' (only PRICE can omit it): {intent.raw_text!r}"
         )
 
     return RuleCondition(
-        indicator=intent.indicator,
+        indicator=indicator,
         period=period,
-        operator=intent.operator,
+        operator=operator,
         value=intent.value,
         compare_indicator=intent.compare_indicator,
         compare_period=intent.compare_period,

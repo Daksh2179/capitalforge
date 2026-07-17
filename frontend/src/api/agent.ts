@@ -1,9 +1,10 @@
-// Typed functions for agent translate/confirm
+// Typed functions for agent translate/confirm/session endpoints
 
 import { apiRequest } from "./client";
 import type {
   ConfirmRequest,
   ConfirmResponse,
+  ConversationSessionResponse,
   TranslateRequest,
   TranslateResponse,
 } from "@/types/agent";
@@ -22,4 +23,12 @@ export function confirm(payload: ConfirmRequest): Promise<ConfirmResponse> {
     method: "POST",
     body: payload,
   });
+}
+
+export function getConversationSession(
+  conversationId: string
+): Promise<ConversationSessionResponse> {
+  return apiRequest<ConversationSessionResponse>(
+    `/agent/conversations/${conversationId}`
+  );
 }

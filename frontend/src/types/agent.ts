@@ -15,9 +15,8 @@ export interface AppliedOperation {
 }
 
 export interface TranslateRequest {
+  conversation_id: string;
   message: string;
-  conversation_history: Record<string, unknown>[];
-  draft?: StrategyConfig | null;
 }
 
 export interface TranslateResponse {
@@ -30,6 +29,11 @@ export interface TranslateResponse {
   error_message?: string | null;
 }
 
+export interface ConversationSessionResponse {
+  messages: Record<string, unknown>[];
+  draft?: StrategyConfig | null;
+}
+
 export type ValidationSeverity = "error" | "warning";
 
 export interface ValidationIssue {
@@ -40,7 +44,7 @@ export interface ValidationIssue {
 
 export interface ConfirmRequest {
   user_id: string;
-  draft: StrategyConfig;
+  conversation_id: string;
   strategy_id?: string | null;
 }
 

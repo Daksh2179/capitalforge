@@ -24,14 +24,32 @@ def test_buy_condition_on_empty_draft_creates_asset_rule():
     assert len(rule.buy_conditions.rules) == 1
 
 
-def test_second_condition_on_same_asset_appends_not_replaces():
+def test_updating_same_condition_shape_replaces_not_appends():
     first = apply_fragment(None, _condition_fragment(FragmentKind.BUY_CONDITION, "AAPL", value=180))
     second = apply_fragment(
         first.config, _condition_fragment(FragmentKind.BUY_CONDITION, "AAPL", value=170)
     )
 
     rule = second.config.asset_rules[0]
+    assert len(rule.buy_conditions.rules) == 1
+    assert rule.buy_conditions.rules[0].value == 170
+
+
+def test_different_condition_shape_on_same_asset_composes_via_and():
+    from app.schemas.strategy import RuleCondition
+
+    first = apply_fragment(None, _condition_fragment(FragmentKind.BUY_CONDITION, "AAPL", value=180))
+
+    rsi_fragment = IntentFragment(
+        kind=FragmentKind.BUY_CONDITION, symbol="AAPL", raw_text="RSI below 30",
+        condition=RuleCondition(indicator="RSI", period=14, operator="less_than", value=30),
+    )
+    second = apply_fragment(first.config, rsi_fragment)
+
+    rule = second.config.asset_rules[0]
     assert len(rule.buy_conditions.rules) == 2
+    indicators = {r.indicator for r in rule.buy_conditions.rules}
+    assert indicators == {"PRICE", "RSI"}
 
 
 def test_condition_on_second_asset_preserves_first():

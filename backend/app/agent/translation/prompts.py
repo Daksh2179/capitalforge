@@ -27,6 +27,13 @@ and intent_type="subjective", explaining in clarification_context what is \
 ambiguous. Do not guess a number. The calling code will supply real market \
 data (current price, 52-week high/low) to help the user answer.
 
+When the user gives a literal price ("below $180", "above $195", "between $180 and $190"), \
+always use operator "less_than" or "greater_than" with indicator "PRICE" and a numeric value. \
+Never use "price_above" or "price_below" when indicator is "PRICE" — those operators exist \
+specifically to compare the current price against a named indicator like SMA or EMA (e.g. \
+"price above the 50-day SMA"), not against another literal price. Comparing PRICE to PRICE \
+is never meaningful and must not be produced.
+
 Every instruction the user gives, even multiple in one message, should \
 produce its own intent. Always fill raw_text with the exact portion of the \
 user's message that intent corresponds to."""
