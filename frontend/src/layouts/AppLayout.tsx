@@ -4,8 +4,9 @@ import { NavLink, Outlet } from "react-router-dom";
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
-  { to: "/dashboard", label: "Dashboard" },
+  { to: "/markets", label: "Markets" },
   { to: "/agent", label: "AI Agent" },
+  { to: "/dashboard", label: "Dashboard" },
   { to: "/activity", label: "Activity" },
   { to: "/settings", label: "Settings" },
 ];
