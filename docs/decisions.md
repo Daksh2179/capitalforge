@@ -564,3 +564,23 @@ placeholder only, final branding deferred.
   del app.dependency_overrides[specific_dependency] instead, or the
   next call silently runs against the real dev database instead of
   the test's isolated transaction.
+
+  ## Markets page scope (Phase 4, final)
+
+- Markets page philosophy: a few polished, purposeful sections, not
+  feature parity with Robinhood/Webull/TradingView. Every section must
+  justify its API cost and UX value before being added.
+- Frozen scope: Market Snapshot (SPY/QQQ/DIA strip), Search (fuzzy,
+  the primary journey for known intent), Featured Stocks (a small
+  curated/hardcoded list, not algorithmic), Stock Detail Page (real
+  chart per symbol). Nothing beyond these four without deliberate
+  justification.
+- Explicitly, permanently out of scope for Markets: Top Gainers/Losers,
+  Most Active, New Listings, personal watchlists, news, sector
+  browsing. Not "later" — these don't fit the product's intentionally
+  curated philosophy, independent of whether the underlying data is
+  ever confirmed available.
+- Search behavior is state-driven, not replace-vs-append: no query
+  shows Featured Stocks; a query with matches shows only results; a
+  query with no matches shows "No results found" with Featured Stocks
+  still visible beneath it, so the page never dead-ends.

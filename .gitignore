@@ -32,3 +32,5 @@ Thumbs.db
 *~
 
 backend/conversations/
+backend/logo_cache/
+backend/asset_directory_cache.json
