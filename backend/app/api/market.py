@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.config import get_settings
-from app.schemas.market import QuoteResponse
+from app.schemas.market import HistoricalBarResponse, QuoteResponse
 from app.trading_engine.domain.timeframe import Timeframe
 from app.trading_engine.market_data.alpaca_market_data import AlpacaMarketData
 from app.trading_engine.market_data.provider import MarketDataProvider
@@ -48,3 +48,18 @@ def search_assets(
     directory: AssetDirectory = Depends(_get_asset_directory),
 ) -> list[AssetEntry]:
     return directory.search(q)
+
+@router.get("/{symbol}/history", response_model=list[HistoricalBarResponse])
+def get_history(
+    symbol: str,
+    days: int = 90,
+    market_data: MarketDataProvider = Depends(_get_market_data),
+) -> list[HistoricalBarResponse]:
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=days)
+    bars = market_data.get_historical_bars(symbol.upper(), Timeframe.DAY, start, end)
+
+    if not bars:
+        raise HTTPException(status_code=404, detail=f"No historical data for symbol {symbol}")
+
+    return [HistoricalBarResponse(timestamp=b.timestamp, close=b.close) for b in bars]

@@ -11,3 +11,9 @@ class QuoteResponse(BaseModel):
     symbol: str
     price: float
     timestamp: datetime
+    
+class HistoricalBarResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    timestamp: datetime
+    close: float

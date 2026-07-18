@@ -10,3 +10,8 @@ export interface AssetEntry {
   symbol: string;
   name: string;
 }
+
+export interface HistoricalBarResponse {
+  timestamp: string;
+  close: number;
+}
