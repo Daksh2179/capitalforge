@@ -5,10 +5,9 @@ import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
   { to: "/markets", label: "Markets" },
+  { to: "/portfolio", label: "Portfolio" },
   { to: "/agent", label: "AI Agent" },
-  { to: "/dashboard", label: "Dashboard" },
   { to: "/activity", label: "Activity" },
-  { to: "/settings", label: "Settings" },
 ];
 
 export function AppLayout() {

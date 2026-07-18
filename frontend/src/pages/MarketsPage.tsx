@@ -1,13 +1,24 @@
 import { useState } from "react";
 import { SymbolSearch } from "@/components/markets/SymbolSearch";
+import { FeaturedStocks } from "@/components/markets/FeaturedStocks";
+import { FeaturedETFs } from "@/components/markets/FeaturedETFs";
 import { StockCard } from "@/components/markets/StockCard";
+import type { AssetEntry } from "@/types/market";
 
 export function MarketsPage() {
   const [selectedSymbols, setSelectedSymbols] = useState<string[]>([]);
+  const [searchState, setSearchState] = useState<{
+    query: string;
+    results: AssetEntry[] | undefined;
+    isFetching: boolean;
+  }>({ query: "", results: undefined, isFetching: false });
 
   function handleSelect(symbol: string) {
     setSelectedSymbols((prev) => (prev.includes(symbol) ? prev : [...prev, symbol]));
   }
+
+  const hasActiveQuery = searchState.query.trim().length > 0;
+  const hasResults = searchState.results && searchState.results.length > 0;
 
   return (
     <div>
@@ -19,17 +30,28 @@ export function MarketsPage() {
         </p>
       </div>
 
-      <SymbolSearch onSelect={handleSelect} />
+      <SymbolSearch onSelect={handleSelect} onStateChange={setSearchState} />
 
-      {selectedSymbols.length === 0 ? (
-        <p className="text-muted-foreground">
-          Search for a stock above, or check back soon for Featured Stocks.
-        </p>
-      ) : (
-        <div className="space-y-3">
+      {selectedSymbols.length > 0 && (
+        <div className="mb-8 space-y-3">
           {selectedSymbols.map((symbol) => (
             <StockCard key={symbol} symbol={symbol} />
           ))}
+        </div>
+      )}
+
+      {!hasActiveQuery && (
+        <div className="space-y-8">
+          <FeaturedStocks />
+          <FeaturedETFs />
+        </div>
+      )}
+
+      {hasActiveQuery && !searchState.isFetching && !hasResults && (
+        <div className="space-y-8">
+          <p className="text-muted-foreground">No results found for "{searchState.query}".</p>
+          <FeaturedStocks />
+          <FeaturedETFs />
         </div>
       )}
     </div>

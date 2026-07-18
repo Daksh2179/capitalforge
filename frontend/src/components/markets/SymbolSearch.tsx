@@ -1,17 +1,25 @@
 import { useState } from "react";
 import { useSearchAssets } from "@/hooks/useSearchAssets";
+import type { AssetEntry } from "@/types/market";
 
 interface SymbolSearchProps {
   onSelect: (symbol: string) => void;
+  onStateChange: (state: { query: string; results: AssetEntry[] | undefined; isFetching: boolean }) => void;
 }
 
-export function SymbolSearch({ onSelect }: SymbolSearchProps) {
+export function SymbolSearch({ onSelect, onStateChange }: SymbolSearchProps) {
   const [query, setQuery] = useState("");
   const { data: results, isFetching } = useSearchAssets(query);
+
+  function handleChange(value: string) {
+    setQuery(value);
+    onStateChange({ query: value, results, isFetching });
+  }
 
   function handleSelect(symbol: string) {
     onSelect(symbol);
     setQuery("");
+    onStateChange({ query: "", results: undefined, isFetching: false });
   }
 
   return (
@@ -19,7 +27,7 @@ export function SymbolSearch({ onSelect }: SymbolSearchProps) {
       <input
         type="text"
         value={query}
-        onChange={(e) => setQuery(e.target.value)}
+        onChange={(e) => handleChange(e.target.value)}
         placeholder="Search by ticker or company name (e.g. AAPL or Apple)"
         className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
       />
