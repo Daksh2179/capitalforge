@@ -1,30 +1,50 @@
 import { useState } from "react";
-import { Button } from "@/components/ui/button";
+import { useSearchAssets } from "@/hooks/useSearchAssets";
 
 interface SymbolSearchProps {
-  onSearch: (symbol: string) => void;
+  onSelect: (symbol: string) => void;
 }
 
-export function SymbolSearch({ onSearch }: SymbolSearchProps) {
-  const [value, setValue] = useState("");
+export function SymbolSearch({ onSelect }: SymbolSearchProps) {
+  const [query, setQuery] = useState("");
+  const { data: results, isFetching } = useSearchAssets(query);
 
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    const trimmed = value.trim().toUpperCase();
-    if (!trimmed) return;
-    onSearch(trimmed);
+  function handleSelect(symbol: string) {
+    onSelect(symbol);
+    setQuery("");
   }
 
   return (
-    <form onSubmit={handleSubmit} className="mb-6 flex gap-2">
+    <div className="relative mb-6">
       <input
         type="text"
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        placeholder="Enter a ticker symbol (e.g. AAPL)"
-        className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Search by ticker or company name (e.g. AAPL or Apple)"
+        className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
       />
-      <Button type="submit">Search</Button>
-    </form>
+
+      {query.trim().length > 0 && (
+        <div className="absolute z-10 mt-1 w-full rounded-md border border-border bg-background shadow-md">
+          {isFetching && (
+            <p className="px-3 py-2 text-sm text-muted-foreground">Searching...</p>
+          )}
+          {!isFetching && results && results.length === 0 && (
+            <p className="px-3 py-2 text-sm text-muted-foreground">No results found.</p>
+          )}
+          {!isFetching &&
+            results?.map((entry) => (
+              <button
+                key={entry.symbol}
+                onClick={() => handleSelect(entry.symbol)}
+                className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-muted"
+              >
+                <span className="font-medium">{entry.symbol}</span>
+                <span className="ml-2 truncate text-muted-foreground">{entry.name}</span>
+              </button>
+            ))}
+        </div>
+      )}
+    </div>
   );
 }

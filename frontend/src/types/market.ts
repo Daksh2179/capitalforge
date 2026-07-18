@@ -5,3 +5,8 @@ export interface QuoteResponse {
   price: number;
   timestamp: string;
 }
+
+export interface AssetEntry {
+  symbol: string;
+  name: string;
+}

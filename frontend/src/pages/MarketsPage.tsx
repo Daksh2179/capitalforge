@@ -3,10 +3,10 @@ import { SymbolSearch } from "@/components/markets/SymbolSearch";
 import { StockCard } from "@/components/markets/StockCard";
 
 export function MarketsPage() {
-  const [symbols, setSymbols] = useState<string[]>([]);
+  const [selectedSymbols, setSelectedSymbols] = useState<string[]>([]);
 
-  function handleSearch(symbol: string) {
-    setSymbols((prev) => (prev.includes(symbol) ? prev : [...prev, symbol]));
+  function handleSelect(symbol: string) {
+    setSelectedSymbols((prev) => (prev.includes(symbol) ? prev : [...prev, symbol]));
   }
 
   return (
@@ -19,15 +19,15 @@ export function MarketsPage() {
         </p>
       </div>
 
-      <SymbolSearch onSearch={handleSearch} />
+      <SymbolSearch onSelect={handleSelect} />
 
-      {symbols.length === 0 ? (
+      {selectedSymbols.length === 0 ? (
         <p className="text-muted-foreground">
-          Search for a stock symbol to see its price and set up trading rules.
+          Search for a stock above, or check back soon for Featured Stocks.
         </p>
       ) : (
         <div className="space-y-3">
-          {symbols.map((symbol) => (
+          {selectedSymbols.map((symbol) => (
             <StockCard key={symbol} symbol={symbol} />
           ))}
         </div>
