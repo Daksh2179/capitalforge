@@ -13,3 +13,10 @@ export function listHoldings(userId: string): Promise<PortfolioHoldingResponse[]
     searchParams: { user_id: userId },
   });
 }
+
+export function removeHolding(userId: string, symbol: string): Promise<void> {
+  return apiRequest<void>(`/portfolio/holdings/${symbol}`, {
+    method: "DELETE",
+    searchParams: { user_id: userId },
+  });
+}

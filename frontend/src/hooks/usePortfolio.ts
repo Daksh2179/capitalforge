@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { addHolding, listHoldings } from "@/api/portfolio";
+import { addHolding, listHoldings, removeHolding } from "@/api/portfolio";
 import { useCurrentUser } from "@/lib/constants";
 
 export function usePortfolioHoldings() {
@@ -15,6 +15,17 @@ export function useAddToPortfolio() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (symbol: string) => addHolding(userId, symbol),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["portfolio", "holdings", userId] });
+    },
+  });
+}
+
+export function useRemoveFromPortfolio() {
+  const { userId } = useCurrentUser();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (symbol: string) => removeHolding(userId, symbol),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["portfolio", "holdings", userId] });
     },

@@ -6,6 +6,7 @@ import { ClarificationCard } from "./ClarificationCard";
 import { DisambiguationCard } from "./DisambiguationCard";
 import { DraftPane } from "./DraftPane";
 import { Button } from "@/components/ui/button";
+import { useLocation } from "react-router-dom";
 
 export function ChatTab() {
   const {
@@ -19,6 +20,9 @@ export function ChatTab() {
     lastConfirmResult,
     resetConversation,
   } = useConversation();
+
+  const location = useLocation();
+  const prefillMessage = (location.state as { prefillMessage?: string } | null)?.prefillMessage;
 
   const draft = lastTranslateResult?.draft ?? session?.draft ?? null;
   const status = lastTranslateResult?.status;
@@ -74,7 +78,11 @@ export function ChatTab() {
           <p className="text-sm text-destructive">{lastTranslateResult.error_message}</p>
         )}
 
-        <MessageInput onSend={(msg) => void sendMessage(msg)} disabled={isSending} />
+        <MessageInput
+          onSend={(msg) => void sendMessage(msg)}
+          disabled={isSending}
+          initialValue={prefillMessage}
+        />
 
         {lastConfirmResult && !lastConfirmResult.confirmed && (
           <div className="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-xs text-destructive">

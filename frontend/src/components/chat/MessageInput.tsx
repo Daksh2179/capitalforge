@@ -1,13 +1,20 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 
 interface MessageInputProps {
   onSend: (message: string) => void;
   disabled?: boolean;
+  initialValue?: string;
 }
 
-export function MessageInput({ onSend, disabled }: MessageInputProps) {
-  const [value, setValue] = useState("");
+export function MessageInput({ onSend, disabled, initialValue }: MessageInputProps) {
+  const [value, setValue] = useState(initialValue ?? "");
+
+  useEffect(() => {
+    if (initialValue) {
+      setValue(initialValue);
+    }
+  }, [initialValue]);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
