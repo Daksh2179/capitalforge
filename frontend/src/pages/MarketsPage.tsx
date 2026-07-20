@@ -4,6 +4,7 @@ import { FeaturedStocks } from "@/components/markets/FeaturedStocks";
 import { FeaturedETFs } from "@/components/markets/FeaturedETFs";
 import { StockCard } from "@/components/markets/StockCard";
 import type { AssetEntry } from "@/types/market";
+import { MarketSnapshot } from "@/components/markets/MarketSnapshot";
 
 export function MarketsPage() {
   const [selectedSymbols, setSelectedSymbols] = useState<string[]>([]);
@@ -22,6 +23,7 @@ export function MarketsPage() {
 
   return (
     <div>
+      <MarketSnapshot />
       <div className="mb-8 rounded-lg border border-border bg-muted/30 px-6 py-8 text-center">
         <h1 className="text-2xl font-semibold">CapitalForge</h1>
         <p className="mt-2 text-sm text-muted-foreground">
