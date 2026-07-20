@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ChatTab } from "@/components/chat/ChatTab";
 import { cn } from "@/lib/utils";
 import { OverviewTab } from "@/components/agent/OverviewTab";
+import { HistoryTab } from "@/components/agent/HistoryTab";
 
 const TABS = ["Overview", "Chat", "History"] as const;
 type Tab = (typeof TABS)[number];
@@ -30,7 +31,7 @@ export function AgentPage() {
 
       {activeTab === "Chat" && <ChatTab />}
       {activeTab === "Overview" && <OverviewTab />}
-      {activeTab === "History" && <p className="text-muted-foreground">History — not yet implemented.</p>}
+      {activeTab === "History" && <HistoryTab />}
     </div>
   );
 }
