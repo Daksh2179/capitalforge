@@ -68,3 +68,7 @@ export function getPortfolioSnapshots(
     { searchParams: { limit } }
   );
 }
+
+export function getCurrentVersion(strategyId: string): Promise<StrategyVersionResponse> {
+  return apiRequest<StrategyVersionResponse>(`/strategies/${strategyId}/current-version`);
+}

@@ -120,3 +120,13 @@ def get_portfolio_snapshots(
         db, strategy_id=strategy_id, limit=limit
     )
     return [PortfolioSnapshotResponse.model_validate(s) for s in snapshots]
+
+@router.get("/{strategy_id}/current-version", response_model=StrategyVersionResponse)
+def get_current_version(
+    strategy_id: uuid.UUID,
+    db: Session = Depends(get_db),
+) -> StrategyVersionResponse:
+    strategy = strategy_service.get_strategy(db, strategy_id=strategy_id)
+    if strategy is None or strategy.current_version is None:
+        raise HTTPException(status_code=404, detail="No current version found")
+    return StrategyVersionResponse.model_validate(strategy.current_version)

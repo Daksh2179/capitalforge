@@ -25,6 +25,7 @@ from app.schemas.agent import (
 from app.schemas.strategy import StrategyResponse, StrategyVersionSource
 from app.services import strategy_service
 from app.trading_engine.market_data.alpaca_market_data import AlpacaMarketData
+from app.models.strategy import StrategyState
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
@@ -104,6 +105,9 @@ def confirm(
             db, user_id=request.user_id, config_json=session.draft.model_dump(),
             source=StrategyVersionSource.CHAT, confirmed_now=True,
         )
+
+    strategy.state = StrategyState.ACTIVE
+    db.commit()
 
     return ConfirmAcceptedResponse(strategy=StrategyResponse.model_validate(strategy), warnings=warnings)
 
