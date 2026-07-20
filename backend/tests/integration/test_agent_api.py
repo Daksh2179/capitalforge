@@ -39,11 +39,19 @@ class FakeMarketDataProvider(MarketDataProvider):
                       open=100, high=110, low=90, close=100 + i, volume=0.0)
             for i in range(5)
         ]
+        
+class FakeAssetDirectory:
+    """Returns the input symbol unchanged, uppercased — enough for
+    tests that don't exercise real company-name resolution."""
+
+    def search(self, query: str, limit: int = 10):
+        from app.assets.asset_directory import AssetEntry
+        return [AssetEntry(symbol=query.upper(), name=query)]
 
 
 def _override_translation_service(batch: IntentBatch) -> None:
     app.dependency_overrides[_get_translation_service] = lambda: TranslationService(
-        FakeLLMService(batch), FakeMarketDataProvider()
+        FakeLLMService(batch), FakeMarketDataProvider(), FakeAssetDirectory()
     )
 
 
@@ -71,7 +79,7 @@ def _valid_config_payload() -> dict:
                 "operator": "AND",
                 "rules": [{"indicator": "PRICE", "period": 1, "operator": "greater_than", "value": 195}],
             },
-            "position_sizing": {"type": "fixed_allocation", "value_pct": 10},
+            "capital_allocation": {"type": "percentage_of_portfolio", "percentage": 10},
             "exit": {"stop_loss_pct": 5, "take_profit_pct": None},
         }],
     }
@@ -234,8 +242,8 @@ def test_confirm_for_existing_strategy_creates_new_version(client: TestClient, d
 
     size_batch = IntentBatch(intents=[
         ParsedIntent(
-            operation="set_position_sizing", intent_type="objective", symbol="AAPL",
-            percentage_value=20, raw_text="Make that 20%",
+            operation="set_capital_allocation", intent_type="objective", symbol="AAPL",
+            allocation_type="percentage_of_portfolio", percentage=20, raw_text="Make that 20%",
         )
     ])
     _override_translation_service(size_batch)
@@ -259,8 +267,8 @@ def test_confirm_for_existing_strategy_creates_new_version(client: TestClient, d
         .all()
     )
     assert len(versions) == 2
-    assert versions[0].config_json["asset_rules"][0]["position_sizing"]["value_pct"] == 5.0
-    assert versions[1].config_json["asset_rules"][0]["position_sizing"]["value_pct"] == 20
+    assert versions[0].config_json["asset_rules"][0]["capital_allocation"]["percentage"] == 5.0
+    assert versions[1].config_json["asset_rules"][0]["capital_allocation"]["percentage"] == 20
 
 
 def test_confirm_for_unknown_strategy_id_returns_404(client: TestClient):
@@ -272,3 +280,4 @@ def test_confirm_for_unknown_strategy_id_returns_404(client: TestClient):
     })
 
     assert response.status_code == 404
+    

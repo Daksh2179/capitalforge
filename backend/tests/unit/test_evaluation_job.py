@@ -70,7 +70,7 @@ def _create_strategy(db_session, symbol: str = "AAPL", max_open_positions: int |
                     "operator": "AND",
                     "rules": [{"indicator": "PRICE", "period": 1, "operator": "greater_than", "value": 999999999}],
                 },
-                "position_sizing": {"type": "fixed_allocation", "value_pct": 5},
+                "capital_allocation": {"type": "percentage_of_portfolio", "percentage": 5},
                 "exit": {"stop_loss_pct": 3, "take_profit_pct": None},
             }],
         },

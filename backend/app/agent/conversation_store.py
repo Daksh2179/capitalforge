@@ -13,11 +13,12 @@ from abc import ABC, abstractmethod
 from pydantic import BaseModel
 
 from app.schemas.strategy import StrategyConfig
-
+from app.agent.conversation_state import ConversationState
 
 class ConversationSession(BaseModel):
     messages: list[dict] = []
     draft: StrategyConfig | None = None
+    state: ConversationState = ConversationState()
 
 
 class ConversationStore(ABC):

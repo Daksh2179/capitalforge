@@ -10,14 +10,14 @@ from dataclasses import dataclass
 from app.agent.translation.intent_translator import FragmentKind, IntentFragment
 from app.schemas.strategy import (
     AssetRule,
+    CapitalAllocation,
     ConditionGroup,
     ExitRules,
     PortfolioRules,
-    PositionSizing,
     StrategyConfig,
 )
 
-_DEFAULT_POSITION_SIZING_PCT = 5.0
+_DEFAULT_ALLOCATION_PCT = 5.0
 
 
 class AmbiguousAssetError(Exception):
@@ -69,12 +69,22 @@ def _empty_draft() -> StrategyConfig:
     return StrategyConfig(portfolio_rules=PortfolioRules(), asset_rules=[])
 
 
+def _describe_allocation(allocation: CapitalAllocation) -> str:
+    if allocation.type == "percentage_of_portfolio":
+        return f"{allocation.percentage}% of the portfolio"
+    if allocation.type == "fixed_capital":
+        return f"${allocation.capital_usd}"
+    return f"{allocation.shares} shares"
+
+
 def _empty_asset_rule(symbol: str) -> AssetRule:
     return AssetRule(
         symbol=symbol,
         buy_conditions=ConditionGroup(operator="AND", rules=[]),
         sell_conditions=ConditionGroup(operator="AND", rules=[]),
-        position_sizing=PositionSizing(type="fixed_allocation", value_pct=_DEFAULT_POSITION_SIZING_PCT),
+        capital_allocation=CapitalAllocation(
+            type="percentage_of_portfolio", percentage=_DEFAULT_ALLOCATION_PCT
+        ),
         exit=ExitRules(),
     )
 
@@ -131,12 +141,10 @@ def _apply_asset_fragment(draft: StrategyConfig | None, symbol: str, fragment: I
         rule = rule.model_copy(update={"exit": rule.exit.model_copy(update={"take_profit_pct": fragment.percentage_value})})
         description = f"Set take profit for {symbol} to {fragment.percentage_value}%"
 
-    elif fragment.kind == FragmentKind.POSITION_SIZING:
-        assert fragment.percentage_value is not None
-        rule = rule.model_copy(update={
-            "position_sizing": PositionSizing(type="fixed_allocation", value_pct=fragment.percentage_value)
-        })
-        description = f"Set position sizing for {symbol} to {fragment.percentage_value}%"
+    elif fragment.kind == FragmentKind.CAPITAL_ALLOCATION:
+        assert fragment.capital_allocation is not None
+        rule = rule.model_copy(update={"capital_allocation": fragment.capital_allocation})
+        description = f"Set capital allocation for {symbol} to {_describe_allocation(fragment.capital_allocation)}"
 
     else:
         raise ValueError(f"Unhandled fragment kind in _apply_asset_fragment: {fragment.kind}")

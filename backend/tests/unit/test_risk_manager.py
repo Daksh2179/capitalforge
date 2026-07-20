@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 
-from app.schemas.strategy import AssetRule, ConditionGroup, ExitRules, PositionSizing, RuleCondition
+from app.schemas.strategy import AssetRule, CapitalAllocation, ConditionGroup, ExitRules, RuleCondition
 from app.trading_engine.domain.portfolio import Portfolio
 from app.trading_engine.domain.position import Position
 from app.trading_engine.domain.signal import Signal, SignalAction
@@ -17,7 +17,11 @@ def _never_true_group() -> ConditionGroup:
     )
 
 
-def _rule(value_pct: float = 5) -> AssetRule:
+def _rule(
+    value_pct: float = 5, allocation: CapitalAllocation | None = None
+) -> AssetRule:
+    if allocation is None:
+        allocation = CapitalAllocation(type="percentage_of_portfolio", percentage=value_pct)
     return AssetRule(
         symbol="AAPL",
         buy_conditions=ConditionGroup(
@@ -25,7 +29,7 @@ def _rule(value_pct: float = 5) -> AssetRule:
             rules=[RuleCondition(indicator="RSI", period=14, operator="less_than", value=30)],
         ),
         sell_conditions=_never_true_group(),
-        position_sizing=PositionSizing(type="fixed_allocation", value_pct=value_pct),
+        capital_allocation=allocation,
         exit=ExitRules(stop_loss_pct=3, take_profit_pct=None),
     )
 
@@ -193,5 +197,106 @@ def test_max_open_positions_allows_adding_to_existing_symbol_at_cap():
     limits = RiskLimits(max_open_positions=2)
 
     decision = evaluate_risk(signal, portfolio, _rule(value_pct=5), limits, current_price=100.0)
+
+    assert decision.approved is True
+
+
+def test_percentage_of_portfolio_sizes_quantity_from_portfolio_value():
+    signal = _buy_signal()
+    portfolio = Portfolio(cash=10000.0)
+    rule = _rule(allocation=CapitalAllocation(type="percentage_of_portfolio", percentage=5))
+
+    decision = evaluate_risk(signal, portfolio, rule, RiskLimits(), current_price=100.0)
+
+    assert decision.approved is True
+    # 5% of 10,000 = 500 / 100 per share = 5 shares
+    assert decision.quantity == 5.0
+
+
+def test_fixed_capital_sizes_quantity_from_dollar_amount():
+    signal = _buy_signal()
+    portfolio = Portfolio(cash=10000.0)
+    rule = _rule(allocation=CapitalAllocation(type="fixed_capital", capital_usd=600))
+
+    decision = evaluate_risk(signal, portfolio, rule, RiskLimits(), current_price=100.0)
+
+    assert decision.approved is True
+    # $600 / $100 per share = 6 shares
+    assert decision.quantity == 6.0
+
+
+def test_share_count_sizes_quantity_directly():
+    signal = _buy_signal()
+    portfolio = Portfolio(cash=10000.0)
+    rule = _rule(allocation=CapitalAllocation(type="share_count", shares=7))
+
+    decision = evaluate_risk(signal, portfolio, rule, RiskLimits(), current_price=100.0)
+
+    assert decision.approved is True
+    assert decision.quantity == 7.0
+
+
+def test_fixed_capital_still_subject_to_max_position_pct():
+    signal = _buy_signal()
+    portfolio = Portfolio(cash=10000.0)
+    rule = _rule(allocation=CapitalAllocation(type="fixed_capital", capital_usd=5000))
+    limits = RiskLimits(max_position_pct=0.20)
+
+    decision = evaluate_risk(signal, portfolio, rule, limits, current_price=100.0)
+
+    # $5,000 is 50% of the 10,000 portfolio, over the 20% max_position_pct
+    assert decision.approved is False
+    assert "max_position_pct" in decision.reason
+
+
+def test_within_total_capital_usd_limit_is_approved():
+    signal = _buy_signal()
+    portfolio = Portfolio(
+        cash=10000.0,
+        positions={"TSLA": Position(symbol="TSLA", quantity=10, average_entry_price=100.0, current_price=100.0)},
+    )
+    limits = RiskLimits(
+        max_position_pct=1.0, max_portfolio_deployment_pct=1.0,
+        min_cash_reserve_pct=0.0, total_capital_usd=2000.0,
+    )
+    rule = _rule(allocation=CapitalAllocation(type="fixed_capital", capital_usd=500))
+
+    decision = evaluate_risk(signal, portfolio, rule, limits, current_price=100.0)
+
+    # 1,000 already deployed + 500 requested = 1,500, within the 2,000 limit
+    assert decision.approved is True
+
+
+def test_exceeding_total_capital_usd_limit_is_rejected():
+    signal = _buy_signal()
+    portfolio = Portfolio(
+        cash=10000.0,
+        positions={"TSLA": Position(symbol="TSLA", quantity=10, average_entry_price=100.0, current_price=100.0)},
+    )
+    limits = RiskLimits(
+        max_position_pct=1.0, max_portfolio_deployment_pct=1.0,
+        min_cash_reserve_pct=0.0, total_capital_usd=1200.0,
+    )
+    rule = _rule(allocation=CapitalAllocation(type="fixed_capital", capital_usd=500))
+
+    decision = evaluate_risk(signal, portfolio, rule, limits, current_price=100.0)
+
+    # 1,000 already deployed + 500 requested = 1,500, over the 1,200 limit
+    assert decision.approved is False
+    assert "total_capital_usd" in decision.reason
+
+
+def test_total_capital_usd_check_skipped_when_unset():
+    signal = _buy_signal()
+    portfolio = Portfolio(
+        cash=10000.0,
+        positions={"TSLA": Position(symbol="TSLA", quantity=10, average_entry_price=100.0, current_price=100.0)},
+    )
+    limits = RiskLimits(
+        max_position_pct=1.0, max_portfolio_deployment_pct=1.0, min_cash_reserve_pct=0.0,
+    )
+    rule = _rule(allocation=CapitalAllocation(type="fixed_capital", capital_usd=5000))
+
+    decision = evaluate_risk(signal, portfolio, rule, limits, current_price=100.0)
 
     assert decision.approved is True

@@ -49,7 +49,7 @@ def test_buy_condition_missing_fields_raises():
 def test_stop_loss_translates_correctly():
     intent = ParsedIntent(
         operation="set_stop_loss", intent_type="objective", symbol="AAPL",
-        percentage_value=5, raw_text="5% stop loss on Apple",
+        percentage=5, raw_text="5% stop loss on Apple",
     )
     fragment = translate_intent(intent)
     assert fragment.kind == FragmentKind.STOP_LOSS
@@ -59,7 +59,7 @@ def test_stop_loss_translates_correctly():
 def test_portfolio_rule_translates_correctly():
     intent = ParsedIntent(
         operation="set_portfolio_rule", intent_type="objective",
-        portfolio_rule_field="cash_reserve_pct", percentage_value=10,
+        portfolio_rule_field="cash_reserve_pct", percentage=10,
         raw_text="keep 10% cash",
     )
     fragment = translate_intent(intent)
@@ -71,3 +71,51 @@ def test_pause_strategy_translates_correctly():
     intent = ParsedIntent(operation="pause_strategy", intent_type="objective", raw_text="pause it")
     fragment = translate_intent(intent)
     assert fragment.kind == FragmentKind.PAUSE_STRATEGY
+
+
+def test_capital_allocation_percentage_translates_correctly():
+    intent = ParsedIntent(
+        operation="set_capital_allocation", intent_type="objective", symbol="AAPL",
+        allocation_type="percentage_of_portfolio", percentage=5,
+        raw_text="5% of my portfolio into Apple",
+    )
+    fragment = translate_intent(intent)
+    assert fragment.kind == FragmentKind.CAPITAL_ALLOCATION
+    assert fragment.capital_allocation is not None
+    assert fragment.capital_allocation.type == "percentage_of_portfolio"
+    assert fragment.capital_allocation.percentage == 5
+
+
+def test_capital_allocation_fixed_capital_translates_correctly():
+    intent = ParsedIntent(
+        operation="set_capital_allocation", intent_type="objective", symbol="AAPL",
+        allocation_type="fixed_capital", capital_usd=6000,
+        raw_text="$6,000 for Apple",
+    )
+    fragment = translate_intent(intent)
+    assert fragment.kind == FragmentKind.CAPITAL_ALLOCATION
+    assert fragment.capital_allocation is not None
+    assert fragment.capital_allocation.type == "fixed_capital"
+    assert fragment.capital_allocation.capital_usd == 6000
+
+
+def test_capital_allocation_share_count_translates_correctly():
+    intent = ParsedIntent(
+        operation="set_capital_allocation", intent_type="objective", symbol="AAPL",
+        allocation_type="share_count", shares=20,
+        raw_text="20 shares of Apple",
+    )
+    fragment = translate_intent(intent)
+    assert fragment.kind == FragmentKind.CAPITAL_ALLOCATION
+    assert fragment.capital_allocation is not None
+    assert fragment.capital_allocation.type == "share_count"
+    assert fragment.capital_allocation.shares == 20
+
+
+def test_capital_allocation_missing_allocation_type_raises():
+    intent = ParsedIntent(
+        operation="set_capital_allocation", intent_type="objective", symbol="AAPL",
+        percentage=5, raw_text="allocate to Apple",
+    )
+    with pytest.raises(ValueError, match="requires allocation_type"):
+        translate_intent(intent)

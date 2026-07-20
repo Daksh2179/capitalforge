@@ -46,6 +46,7 @@ def build_risk_limits(portfolio_rules: PortfolioRules) -> RiskLimits:
             else defaults.min_cash_reserve_pct
         ),
         max_open_positions=portfolio_rules.max_open_positions,
+        total_capital_usd=portfolio_rules.total_capital_usd,
     )
 
 

@@ -123,7 +123,17 @@ def _check_exit_percentage_sanity(rule) -> list[ValidationIssue]:
 
 
 def _check_allocation_over_commitment(config: StrategyConfig) -> list[ValidationIssue]:
-    total_allocation = sum(rule.position_sizing.value_pct for rule in config.asset_rules)
+    # Only percentage_of_portfolio allocations are commensurable as a
+    # share of the portfolio; fixed_capital and share_count allocations
+    # can't be summed into a single percentage, so they're excluded from
+    # this over-commitment check (the risk manager enforces the dollar
+    # ceilings for those at trade time).
+    total_allocation = sum(
+        rule.capital_allocation.percentage
+        for rule in config.asset_rules
+        if rule.capital_allocation.type == "percentage_of_portfolio"
+        and rule.capital_allocation.percentage is not None
+    )
     max_allocation = config.portfolio_rules.max_allocation_pct
 
     issues = []

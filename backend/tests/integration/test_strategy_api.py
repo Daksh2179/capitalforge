@@ -22,7 +22,7 @@ def _valid_config_payload() -> dict:
                 "operator": "AND",
                 "rules": [{"indicator": "PRICE", "period": 1, "operator": "greater_than", "value": 195}],
             },
-            "position_sizing": {"type": "fixed_allocation", "value_pct": 5},
+            "capital_allocation": {"type": "percentage_of_portfolio", "percentage": 5},
             "exit": {"stop_loss_pct": 3, "take_profit_pct": None},
         }],
     }
@@ -93,7 +93,7 @@ def test_create_new_version_advances_current_version_without_mutating_old_one(
     first_version_id = create_response.json()["current_version_id"]
 
     new_config = _valid_config_payload()
-    new_config["asset_rules"][0]["position_sizing"]["value_pct"] = 10
+    new_config["asset_rules"][0]["capital_allocation"]["percentage"] = 10
 
     version_response = client.post(
         f"/strategies/{strategy_id}/versions",
@@ -111,7 +111,7 @@ def test_create_new_version_advances_current_version_without_mutating_old_one(
     old_version = db_session.get(StrategyVersion, uuid.UUID(first_version_id))
     assert old_version is not None
     assert old_version.version_number == 1
-    assert old_version.config_json["asset_rules"][0]["position_sizing"]["value_pct"] == 5
+    assert old_version.config_json["asset_rules"][0]["capital_allocation"]["percentage"] == 5
 
 
 def test_create_version_for_unknown_strategy_returns_404(client: TestClient):

@@ -20,6 +20,9 @@ class FakeLLMService(LLMService):
     def generate_structured(self, messages, response_model, schema_name):
         return self._batch  # type: ignore[return-value]
 
+    def generate_text(self, messages):
+        raise NotImplementedError("not used in these tests")
+
 
 class FakeMarketDataProvider(MarketDataProvider):
     def get_historical_bars(self, symbol, timeframe, start, end):
@@ -31,6 +34,15 @@ class FakeMarketDataProvider(MarketDataProvider):
         ]
 
 
+class FakeAssetDirectory:
+    """Returns the input symbol unchanged, uppercased — enough for
+    tests that don't exercise real company-name resolution."""
+
+    def search(self, query: str, limit: int = 10):
+        from app.assets.asset_directory import AssetEntry
+        return [AssetEntry(symbol=query.upper(), name=query)]
+
+
 def test_objective_intent_updates_draft():
     batch = IntentBatch(intents=[
         ParsedIntent(
@@ -39,9 +51,9 @@ def test_objective_intent_updates_draft():
             raw_text="Buy Apple below $180",
         )
     ])
-    service = TranslationService(FakeLLMService(batch), FakeMarketDataProvider())
+    service = TranslationService(FakeLLMService(batch), FakeMarketDataProvider(), FakeAssetDirectory())
 
-    result = service.translate("Buy Apple below $180", [], None)
+    result, _ = service.translate("Buy Apple below $180", [], None)
 
     assert result.status == TranslationStatus.UPDATED_DRAFT
     assert result.draft is not None
@@ -55,9 +67,9 @@ def test_subjective_intent_returns_clarification_with_market_context():
             clarification_context="cheap is subjective", raw_text="buy when cheap",
         )
     ])
-    service = TranslationService(FakeLLMService(batch), FakeMarketDataProvider())
+    service = TranslationService(FakeLLMService(batch), FakeMarketDataProvider(), FakeAssetDirectory())
 
-    result = service.translate("buy when cheap", [], None)
+    result, _ = service.translate("buy when cheap", [], None)
 
     assert result.status == TranslationStatus.NEEDS_CLARIFICATION
     assert result.clarification_message is not None
@@ -69,21 +81,21 @@ def test_ambiguous_update_returns_disambiguation():
         ParsedIntent(operation="set_buy_condition", intent_type="objective", symbol="AAPL",
                      indicator="PRICE", period=1, operator="less_than", value=180, raw_text="buy AAPL below 180"),
     ])
-    service = TranslationService(FakeLLMService(build_batch), FakeMarketDataProvider())
-    first_result = service.translate("buy AAPL below 180", [], None)
+    service = TranslationService(FakeLLMService(build_batch), FakeMarketDataProvider(), FakeAssetDirectory())
+    first_result, _ = service.translate("buy AAPL below 180", [], None)
 
     build_batch_2 = IntentBatch(intents=[
         ParsedIntent(operation="set_buy_condition", intent_type="objective", symbol="NVDA",
                      indicator="PRICE", period=1, operator="less_than", value=140, raw_text="buy NVDA below 140"),
     ])
-    service_2 = TranslationService(FakeLLMService(build_batch_2), FakeMarketDataProvider())
-    second_result = service_2.translate("buy NVDA below 140", [], first_result.draft)
+    service_2 = TranslationService(FakeLLMService(build_batch_2), FakeMarketDataProvider(), FakeAssetDirectory())
+    second_result, _ = service_2.translate("buy NVDA below 140", [], first_result.draft)
 
     ambiguous_batch = IntentBatch(intents=[
-        ParsedIntent(operation="set_stop_loss", intent_type="objective", percentage_value=5, raw_text="make that 5%")
+        ParsedIntent(operation="set_stop_loss", intent_type="objective", percentage=5, raw_text="make that 5%")
     ])
-    service_3 = TranslationService(FakeLLMService(ambiguous_batch), FakeMarketDataProvider())
-    result = service_3.translate("make that 5%", [], second_result.draft)
+    service_3 = TranslationService(FakeLLMService(ambiguous_batch), FakeMarketDataProvider(), FakeAssetDirectory())
+    result, _ = service_3.translate("make that 5%", [], second_result.draft)
 
     assert result.status == TranslationStatus.NEEDS_DISAMBIGUATION
     assert set(result.disambiguation_candidates) == {"AAPL", "NVDA"}
@@ -94,8 +106,11 @@ def test_llm_error_returns_error_status():
         def generate_structured(self, messages, response_model, schema_name):
             raise RuntimeError("API unavailable")
 
-    service = TranslationService(BrokenLLMService(), FakeMarketDataProvider())
-    result = service.translate("anything", [], None)
+        def generate_text(self, messages):
+            raise NotImplementedError("not used in these tests")
+
+    service = TranslationService(BrokenLLMService(), FakeMarketDataProvider(), FakeAssetDirectory())
+    result, _ = service.translate("anything", [], None)
 
     assert result.status == TranslationStatus.ERROR
     assert result.error_message is not None

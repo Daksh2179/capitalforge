@@ -8,7 +8,7 @@ import enum
 from dataclasses import dataclass
 
 from app.agent.translation.parsed_intent import ParsedIntent
-from app.schemas.strategy import RuleCondition
+from app.schemas.strategy import CapitalAllocation, RuleCondition
 
 
 class FragmentKind(str, enum.Enum):
@@ -16,7 +16,7 @@ class FragmentKind(str, enum.Enum):
     SELL_CONDITION = "sell_condition"
     STOP_LOSS = "stop_loss"
     TAKE_PROFIT = "take_profit"
-    POSITION_SIZING = "position_sizing"
+    CAPITAL_ALLOCATION = "capital_allocation"
     PORTFOLIO_RULE = "portfolio_rule"
     REMOVE_ASSET = "remove_asset"
     PAUSE_STRATEGY = "pause_strategy"
@@ -31,6 +31,7 @@ class IntentFragment:
     raw_text: str
     condition: RuleCondition | None = None
     percentage_value: float | None = None
+    capital_allocation: CapitalAllocation | None = None
     portfolio_rule_field: str | None = None
     max_open_positions: int | None = None
     clarification_context: str | None = None
@@ -41,7 +42,7 @@ _OPERATION_TO_KIND: dict[str, FragmentKind] = {
     "set_sell_condition": FragmentKind.SELL_CONDITION,
     "set_stop_loss": FragmentKind.STOP_LOSS,
     "set_take_profit": FragmentKind.TAKE_PROFIT,
-    "set_position_sizing": FragmentKind.POSITION_SIZING,
+    "set_capital_allocation": FragmentKind.CAPITAL_ALLOCATION,
     "set_portfolio_rule": FragmentKind.PORTFOLIO_RULE,
     "remove_asset": FragmentKind.REMOVE_ASSET,
     "pause_strategy": FragmentKind.PAUSE_STRATEGY,
@@ -70,25 +71,38 @@ def translate_intent(intent: ParsedIntent) -> IntentFragment:
     if kind in (FragmentKind.STOP_LOSS, FragmentKind.TAKE_PROFIT):
         return IntentFragment(
             kind=kind, symbol=intent.symbol, raw_text=intent.raw_text,
-            percentage_value=intent.percentage_value,
+            percentage_value=intent.percentage,
         )
 
-    if kind == FragmentKind.POSITION_SIZING:
+    if kind == FragmentKind.CAPITAL_ALLOCATION:
         return IntentFragment(
             kind=kind, symbol=intent.symbol, raw_text=intent.raw_text,
-            percentage_value=intent.percentage_value,
+            capital_allocation=_build_capital_allocation(intent),
         )
 
     if kind == FragmentKind.PORTFOLIO_RULE:
         return IntentFragment(
             kind=kind, symbol=None, raw_text=intent.raw_text,
             portfolio_rule_field=intent.portfolio_rule_field,
-            percentage_value=intent.percentage_value,
+            percentage_value=intent.percentage,
             max_open_positions=intent.max_open_positions,
         )
 
     # remove_asset, pause_strategy, resume_strategy: symbol/raw_text only
     return IntentFragment(kind=kind, symbol=intent.symbol, raw_text=intent.raw_text)
+
+
+def _build_capital_allocation(intent: ParsedIntent) -> CapitalAllocation:
+    if intent.allocation_type is None:
+        raise ValueError(
+            f"set_capital_allocation requires allocation_type for: {intent.raw_text!r}"
+        )
+
+    if intent.allocation_type == "percentage_of_portfolio":
+        return CapitalAllocation(type="percentage_of_portfolio", percentage=intent.percentage)
+    if intent.allocation_type == "fixed_capital":
+        return CapitalAllocation(type="fixed_capital", capital_usd=intent.capital_usd)
+    return CapitalAllocation(type="share_count", shares=intent.shares)
 
 
 def _build_condition(intent: ParsedIntent) -> RuleCondition:

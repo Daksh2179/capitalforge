@@ -38,7 +38,7 @@ def test_portfolio_rule_intent():
         operation="set_portfolio_rule",
         intent_type="objective",
         portfolio_rule_field="cash_reserve_pct",
-        percentage_value=10,
+        percentage=10,
         raw_text="Keep 10% in cash reserve",
     )
     assert intent.portfolio_rule_field == "cash_reserve_pct"

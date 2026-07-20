@@ -2,7 +2,12 @@
 // Chat draft pane and (later) the Agent Rules tab — same underlying
 // data, same translation into human-readable text.
 
-import type { AssetRule, ConditionGroup, RuleCondition } from "@/types/strategy";
+import type {
+  AssetRule,
+  CapitalAllocation,
+  ConditionGroup,
+  RuleCondition,
+} from "@/types/strategy";
 
 function formatCondition(rule: RuleCondition): string {
   const indicator =
@@ -34,6 +39,19 @@ function formatCondition(rule: RuleCondition): string {
   }
 }
 
+export function formatCapitalAllocation(allocation: CapitalAllocation): string {
+  switch (allocation.type) {
+    case "percentage_of_portfolio":
+      return `${allocation.percentage}% of portfolio`;
+    case "fixed_capital":
+      return `$${allocation.capital_usd?.toLocaleString()} allocated`;
+    case "share_count":
+      return `${allocation.shares} shares`;
+    default:
+      return "";
+  }
+}
+
 export function formatConditionGroup(group: ConditionGroup): string {
   if (group.rules.length === 0) {
     return "(no conditions set)";
@@ -61,7 +79,7 @@ export function formatAssetRule(rule: AssetRule): {
     symbol: rule.symbol,
     buy: formatConditionGroup(rule.buy_conditions),
     sell: formatConditionGroup(rule.sell_conditions),
-    sizing: `${rule.position_sizing.value_pct}% allocation`,
+    sizing: formatCapitalAllocation(rule.capital_allocation),
     exit: exitParts.length > 0 ? exitParts.join(", ") : null,
   };
 }

@@ -26,9 +26,16 @@ export interface ConditionGroup {
   rules: RuleCondition[];
 }
 
-export interface PositionSizing {
-  type: "fixed_allocation";
-  value_pct: number;
+export type AllocationType =
+  | "percentage_of_portfolio"
+  | "fixed_capital"
+  | "share_count";
+
+export interface CapitalAllocation {
+  type: AllocationType;
+  percentage?: number | null;
+  capital_usd?: number | null;
+  shares?: number | null;
 }
 
 export interface ExitRules {
@@ -40,7 +47,7 @@ export interface AssetRule {
   symbol: string;
   buy_conditions: ConditionGroup;
   sell_conditions: ConditionGroup;
-  position_sizing: PositionSizing;
+  capital_allocation: CapitalAllocation;
   exit: ExitRules;
 }
 
@@ -48,6 +55,7 @@ export interface PortfolioRules {
   cash_reserve_pct?: number | null;
   max_allocation_pct?: number | null;
   max_open_positions?: number | null;
+  total_capital_usd?: number | null;
 }
 
 export interface StrategyConfig {

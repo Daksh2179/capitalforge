@@ -74,7 +74,7 @@ def test_explain_unexplained_decisions_persists_and_counts(db_session):
                 "sell_conditions": {"operator": "AND", "rules": [
                     {"indicator": "PRICE", "period": 1, "operator": "greater_than", "value": 195}
                 ]},
-                "position_sizing": {"type": "fixed_allocation", "value_pct": 10},
+                "capital_allocation": {"type": "percentage_of_portfolio", "percentage": 10},
                 "exit": {"stop_loss_pct": 5, "take_profit_pct": None},
             }],
         },
@@ -110,7 +110,7 @@ def test_explain_unexplained_decisions_skips_already_explained(db_session):
                 "sell_conditions": {"operator": "AND", "rules": [
                     {"indicator": "PRICE", "period": 1, "operator": "greater_than", "value": 195}
                 ]},
-                "position_sizing": {"type": "fixed_allocation", "value_pct": 10},
+                "capital_allocation": {"type": "percentage_of_portfolio", "percentage": 10},
                 "exit": {"stop_loss_pct": 5, "take_profit_pct": None},
             }],
         },
@@ -144,7 +144,7 @@ def test_explain_unexplained_decisions_respects_limit(db_session):
                 "sell_conditions": {"operator": "AND", "rules": [
                     {"indicator": "PRICE", "period": 1, "operator": "greater_than", "value": 195}
                 ]},
-                "position_sizing": {"type": "fixed_allocation", "value_pct": 10},
+                "capital_allocation": {"type": "percentage_of_portfolio", "percentage": 10},
                 "exit": {"stop_loss_pct": 5, "take_profit_pct": None},
             }],
         },

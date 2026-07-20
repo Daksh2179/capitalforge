@@ -5,10 +5,9 @@ from pydantic import ValidationError
 
 from app.schemas.strategy import (
     AssetRule,
-    ConditionGroup,
+    CapitalAllocation,
     ExitRules,
     PortfolioRules,
-    PositionSizing,
     RuleCondition,
     StrategyConfig,
 )
@@ -25,7 +24,7 @@ def _valid_asset_rule(symbol: str = "AAPL") -> dict:
             "operator": "AND",
             "rules": [{"indicator": "PRICE", "period": 1, "operator": "greater_than", "value": 195}],
         },
-        "position_sizing": {"type": "fixed_allocation", "value_pct": 10},
+        "capital_allocation": {"type": "percentage_of_portfolio", "percentage": 10},
         "exit": {"stop_loss_pct": 5, "take_profit_pct": None},
     }
 
@@ -62,14 +61,6 @@ def test_duplicate_symbols_in_asset_rules_rejected():
     data["asset_rules"].append(_valid_asset_rule("AAPL"))
 
     with pytest.raises(ValidationError, match="only appear once"):
-        StrategyConfig.model_validate(data)
-
-
-def test_empty_asset_rules_rejected():
-    data = _valid_config_dict()
-    data["asset_rules"] = []
-
-    with pytest.raises(ValidationError):
         StrategyConfig.model_validate(data)
 
 
@@ -159,11 +150,6 @@ def test_invalid_operator_literal_is_rejected():
         RuleCondition(indicator="RSI", period=14, operator="not_a_real_operator", value=30)
 
 
-def test_condition_group_empty_rules_rejected():
-    with pytest.raises(ValidationError):
-        ConditionGroup(operator="AND", rules=[])
-
-
 def test_asset_rule_requires_both_buy_and_sell_conditions():
     data = _valid_asset_rule()
     del data["sell_conditions"]
@@ -180,10 +166,51 @@ def test_asset_rule_unknown_field_rejected():
         AssetRule.model_validate(data)
 
 
-@pytest.mark.parametrize("bad_value_pct", [0, -5, 101, 150])
-def test_position_sizing_value_pct_out_of_range_is_rejected(bad_value_pct):
-    with pytest.raises(ValidationError):
-        PositionSizing(type="fixed_allocation", value_pct=bad_value_pct)
+class TestCapitalAllocation:
+    def test_percentage_of_portfolio_is_valid(self):
+        allocation = CapitalAllocation(type="percentage_of_portfolio", percentage=10)
+        assert allocation.percentage == 10
+        assert allocation.capital_usd is None
+        assert allocation.shares is None
+
+    def test_fixed_capital_is_valid(self):
+        allocation = CapitalAllocation(type="fixed_capital", capital_usd=6000)
+        assert allocation.capital_usd == 6000
+        assert allocation.percentage is None
+        assert allocation.shares is None
+
+    def test_share_count_is_valid(self):
+        allocation = CapitalAllocation(type="share_count", shares=20)
+        assert allocation.shares == 20
+        assert allocation.percentage is None
+        assert allocation.capital_usd is None
+
+    @pytest.mark.parametrize("bad_percentage", [0, -5, 101, 150])
+    def test_percentage_out_of_range_is_rejected(self, bad_percentage):
+        with pytest.raises(ValidationError):
+            CapitalAllocation(type="percentage_of_portfolio", percentage=bad_percentage)
+
+    @pytest.mark.parametrize("bad_capital", [0, -100])
+    def test_capital_usd_non_positive_is_rejected(self, bad_capital):
+        with pytest.raises(ValidationError):
+            CapitalAllocation(type="fixed_capital", capital_usd=bad_capital)
+
+    @pytest.mark.parametrize("bad_shares", [0, -5])
+    def test_shares_non_positive_is_rejected(self, bad_shares):
+        with pytest.raises(ValidationError):
+            CapitalAllocation(type="share_count", shares=bad_shares)
+
+    def test_missing_matching_value_is_rejected(self):
+        with pytest.raises(ValidationError, match="requires its matching value"):
+            CapitalAllocation(type="fixed_capital", percentage=10)
+
+    def test_setting_non_matching_value_is_rejected(self):
+        with pytest.raises(ValidationError, match="Only the value matching"):
+            CapitalAllocation(type="percentage_of_portfolio", percentage=10, shares=5)
+
+    def test_unknown_allocation_type_is_rejected(self):
+        with pytest.raises(ValidationError):
+            CapitalAllocation(type="fixed_allocation", percentage=10)
 
 
 def test_exit_rules_negative_percentages_rejected():

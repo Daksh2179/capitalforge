@@ -2,7 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 
-from app.schemas.strategy import AssetRule, ConditionGroup, ExitRules, PositionSizing, RuleCondition
+from app.schemas.strategy import AssetRule, CapitalAllocation, ConditionGroup, ExitRules, RuleCondition
 from app.trading_engine.domain.market_bar import MarketBar
 from app.trading_engine.domain.position import Position
 from app.trading_engine.domain.signal import SignalAction
@@ -36,7 +36,7 @@ def _rule(
         symbol="TEST",
         buy_conditions=buy_conditions,
         sell_conditions=sell_conditions or _never_true_group(),
-        position_sizing=PositionSizing(type="fixed_allocation", value_pct=5),
+        capital_allocation=CapitalAllocation(type="percentage_of_portfolio", percentage=5),
         exit=ExitRules(stop_loss_pct=stop_loss_pct, take_profit_pct=take_profit_pct),
     )
 

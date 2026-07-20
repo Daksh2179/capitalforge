@@ -26,6 +26,7 @@ from app.schemas.strategy import StrategyResponse, StrategyVersionSource
 from app.services import strategy_service
 from app.trading_engine.market_data.alpaca_market_data import AlpacaMarketData
 from app.models.strategy import StrategyState
+from app.assets.asset_directory import AssetDirectory
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
@@ -34,7 +35,8 @@ def _get_translation_service() -> TranslationService:
     settings = get_settings()
     llm = LLMClient(settings.groq_api_key, settings.groq_model)
     market_data = AlpacaMarketData(settings.alpaca_api_key, settings.alpaca_secret_key)
-    return TranslationService(llm, market_data)
+    asset_directory = AssetDirectory(settings.alpaca_api_key, settings.alpaca_secret_key)
+    return TranslationService(llm, market_data, asset_directory)
 
 
 def _get_conversation_store() -> ConversationStore:
@@ -49,7 +51,9 @@ def translate(
 ) -> TranslateResponse:
     session = store.get(request.conversation_id) or ConversationSession()
 
-    result = service.translate(request.message, session.messages, session.draft)
+    result, new_state = service.translate(
+        request.message, session.messages, session.draft, session.state
+    )
 
     assistant_content = _summarize_result_for_history(result)
     updated_session = ConversationSession(
@@ -59,6 +63,7 @@ def translate(
             {"role": "assistant", "content": assistant_content},
         ],
         draft=result.draft,
+        state=new_state,
     )
     store.save(request.conversation_id, updated_session)
 

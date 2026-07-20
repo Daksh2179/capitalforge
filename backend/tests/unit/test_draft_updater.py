@@ -4,7 +4,7 @@ import pytest
 
 from app.agent.translation.draft_updater import AmbiguousAssetError, apply_fragment
 from app.agent.translation.intent_translator import FragmentKind, IntentFragment
-from app.schemas.strategy import RuleCondition
+from app.schemas.strategy import CapitalAllocation, RuleCondition
 
 
 def _condition_fragment(kind: FragmentKind, symbol: str | None, value: float = 180) -> IntentFragment:
@@ -103,6 +103,42 @@ def test_portfolio_rule_percentage_field_applies():
     outcome = apply_fragment(None, fragment)
 
     assert outcome.config.portfolio_rules.cash_reserve_pct == 10
+
+
+def test_new_asset_gets_default_percentage_capital_allocation():
+    outcome = apply_fragment(None, _condition_fragment(FragmentKind.BUY_CONDITION, "AAPL"))
+
+    allocation = outcome.config.asset_rules[0].capital_allocation
+    assert allocation.type == "percentage_of_portfolio"
+    assert allocation.percentage == 5.0
+
+
+def test_capital_allocation_fixed_capital_applies():
+    first = apply_fragment(None, _condition_fragment(FragmentKind.BUY_CONDITION, "AAPL"))
+    fragment = IntentFragment(
+        kind=FragmentKind.CAPITAL_ALLOCATION, symbol="AAPL", raw_text="$6,000 for Apple",
+        capital_allocation=CapitalAllocation(type="fixed_capital", capital_usd=6000),
+    )
+
+    outcome = apply_fragment(first.config, fragment)
+
+    allocation = outcome.config.asset_rules[0].capital_allocation
+    assert allocation.type == "fixed_capital"
+    assert allocation.capital_usd == 6000
+
+
+def test_capital_allocation_share_count_applies():
+    first = apply_fragment(None, _condition_fragment(FragmentKind.BUY_CONDITION, "AAPL"))
+    fragment = IntentFragment(
+        kind=FragmentKind.CAPITAL_ALLOCATION, symbol="AAPL", raw_text="20 shares of Apple",
+        capital_allocation=CapitalAllocation(type="share_count", shares=20),
+    )
+
+    outcome = apply_fragment(first.config, fragment)
+
+    allocation = outcome.config.asset_rules[0].capital_allocation
+    assert allocation.type == "share_count"
+    assert allocation.shares == 20
 
 
 def test_portfolio_rule_max_open_positions_field_applies():

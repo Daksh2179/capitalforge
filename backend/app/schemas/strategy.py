@@ -71,11 +71,28 @@ class ConditionGroup(BaseModel):
     rules: list[RuleCondition] = Field(default_factory=list)
 
 
-class PositionSizing(BaseModel):
+class CapitalAllocation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["fixed_allocation"]
-    value_pct: float = Field(gt=0, le=100)
+    type: Literal["percentage_of_portfolio", "fixed_capital", "share_count"]
+    percentage: float | None = Field(default=None, gt=0, le=100)
+    capital_usd: float | None = Field(default=None, gt=0)
+    shares: float | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def _validate_one_value_matches_type(self) -> "CapitalAllocation":
+        provided = {
+            "percentage_of_portfolio": self.percentage,
+            "fixed_capital": self.capital_usd,
+            "share_count": self.shares,
+        }
+        expected = provided.get(self.type)
+        if expected is None:
+            raise ValueError(f"type='{self.type}' requires its matching value to be set")
+        others = [v for k, v in provided.items() if k != self.type]
+        if any(v is not None for v in others):
+            raise ValueError("Only the value matching 'type' may be set")
+        return self
 
 
 class ExitRules(BaseModel):
@@ -96,7 +113,7 @@ class AssetRule(BaseModel):
     symbol: str = Field(min_length=1, max_length=10)
     buy_conditions: ConditionGroup
     sell_conditions: ConditionGroup
-    position_sizing: PositionSizing
+    capital_allocation: CapitalAllocation
     exit: ExitRules
 
 
@@ -112,6 +129,7 @@ class PortfolioRules(BaseModel):
     cash_reserve_pct: float | None = Field(default=None, ge=0, le=100)
     max_allocation_pct: float | None = Field(default=None, gt=0, le=100)
     max_open_positions: int | None = Field(default=None, gt=0)
+    total_capital_usd: float | None = Field(default=None, gt=0)
 
 
 class StrategyConfig(BaseModel):

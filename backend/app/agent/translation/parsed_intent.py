@@ -14,13 +14,15 @@ Operation = Literal[
     "set_sell_condition",
     "set_stop_loss",
     "set_take_profit",
-    "set_position_sizing",
+    "set_capital_allocation",
     "set_portfolio_rule",
     "remove_asset",
     "pause_strategy",
     "resume_strategy",
     "request_clarification",
 ]
+
+AllocationType = Literal["percentage_of_portfolio", "fixed_capital", "share_count"]
 
 IntentType = Literal["objective", "subjective"]
 
@@ -48,7 +50,10 @@ class ParsedIntent(BaseModel):
     compare_indicator: Indicator | None = None
     compare_period: int | None = None
 
-    percentage_value: float | None = None
+    percentage: float | None = None
+    allocation_type: AllocationType | None = None
+    capital_usd: float | None = None
+    shares: float | None = None
     portfolio_rule_field: PortfolioRuleField | None = None
     max_open_positions: int | None = None
 

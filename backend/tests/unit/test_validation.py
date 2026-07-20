@@ -3,10 +3,10 @@
 from app.agent.translation.validation import Severity, validate_strategy
 from app.schemas.strategy import (
     AssetRule,
+    CapitalAllocation,
     ConditionGroup,
     ExitRules,
     PortfolioRules,
-    PositionSizing,
     RuleCondition,
     StrategyConfig,
 )
@@ -21,7 +21,7 @@ def _valid_asset_rule(symbol: str = "AAPL", buy_price: float = 180, sell_price: 
         symbol=symbol,
         buy_conditions=ConditionGroup(operator="AND", rules=[_price_condition("less_than", buy_price)]),
         sell_conditions=ConditionGroup(operator="AND", rules=[_price_condition("greater_than", sell_price)]),
-        position_sizing=PositionSizing(type="fixed_allocation", value_pct=10),
+        capital_allocation=CapitalAllocation(type="percentage_of_portfolio", percentage=10),
         exit=ExitRules(stop_loss_pct=5, take_profit_pct=10),
     )
 
@@ -49,7 +49,7 @@ def test_asset_rule_with_no_buy_conditions_produces_error():
         symbol="AAPL",
         buy_conditions=ConditionGroup(operator="AND", rules=[]),
         sell_conditions=ConditionGroup(operator="AND", rules=[_price_condition("greater_than", 195)]),
-        position_sizing=PositionSizing(type="fixed_allocation", value_pct=10),
+        capital_allocation=CapitalAllocation(type="percentage_of_portfolio", percentage=10),
         exit=ExitRules(),
     )
     config = StrategyConfig(portfolio_rules=PortfolioRules(), asset_rules=[rule])
@@ -64,7 +64,7 @@ def test_asset_rule_with_no_sell_conditions_produces_error():
         symbol="AAPL",
         buy_conditions=ConditionGroup(operator="AND", rules=[_price_condition("less_than", 180)]),
         sell_conditions=ConditionGroup(operator="AND", rules=[]),
-        position_sizing=PositionSizing(type="fixed_allocation", value_pct=10),
+        capital_allocation=CapitalAllocation(type="percentage_of_portfolio", percentage=10),
         exit=ExitRules(),
     )
     config = StrategyConfig(portfolio_rules=PortfolioRules(), asset_rules=[rule])
@@ -92,7 +92,7 @@ def test_indicator_based_conditions_skip_price_contradiction_check():
         sell_conditions=ConditionGroup(operator="AND", rules=[
             RuleCondition(indicator="RSI", period=14, operator="greater_than", value=70)
         ]),
-        position_sizing=PositionSizing(type="fixed_allocation", value_pct=10),
+        capital_allocation=CapitalAllocation(type="percentage_of_portfolio", percentage=10),
         exit=ExitRules(),
     )
     config = StrategyConfig(portfolio_rules=PortfolioRules(), asset_rules=[rule])
@@ -126,9 +126,9 @@ def test_stop_loss_larger_than_take_profit_is_warning_not_error():
 
 def test_allocation_over_100_percent_is_error():
     rule1 = _valid_asset_rule("AAPL")
-    rule1 = rule1.model_copy(update={"position_sizing": PositionSizing(type="fixed_allocation", value_pct=70)})
+    rule1 = rule1.model_copy(update={"capital_allocation": CapitalAllocation(type="percentage_of_portfolio", percentage=70)})
     rule2 = _valid_asset_rule("NVDA")
-    rule2 = rule2.model_copy(update={"position_sizing": PositionSizing(type="fixed_allocation", value_pct=50)})
+    rule2 = rule2.model_copy(update={"capital_allocation": CapitalAllocation(type="percentage_of_portfolio", percentage=50)})
     config = StrategyConfig(portfolio_rules=PortfolioRules(), asset_rules=[rule1, rule2])
 
     issues = validate_strategy(config)
@@ -138,7 +138,7 @@ def test_allocation_over_100_percent_is_error():
 
 def test_allocation_exceeding_max_allocation_pct_is_warning():
     rule = _valid_asset_rule()
-    rule = rule.model_copy(update={"position_sizing": PositionSizing(type="fixed_allocation", value_pct=30)})
+    rule = rule.model_copy(update={"capital_allocation": CapitalAllocation(type="percentage_of_portfolio", percentage=30)})
     config = StrategyConfig(
         portfolio_rules=PortfolioRules(max_allocation_pct=25), asset_rules=[rule]
     )

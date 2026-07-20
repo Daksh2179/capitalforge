@@ -59,7 +59,16 @@ def evaluate_risk(
                 ),
             )
 
-    requested_value = total_value * (rule.position_sizing.value_pct / 100)
+    allocation = rule.capital_allocation
+    if allocation.type == "percentage_of_portfolio":
+        assert allocation.percentage is not None
+        requested_value = total_value * (allocation.percentage / 100)
+    elif allocation.type == "fixed_capital":
+        assert allocation.capital_usd is not None
+        requested_value = allocation.capital_usd
+    else:  # share_count
+        assert allocation.shares is not None
+        requested_value = allocation.shares * current_price
 
     existing_position = portfolio.positions.get(signal.symbol)
     existing_value = existing_position.market_value or 0.0 if existing_position else 0.0
@@ -96,6 +105,18 @@ def evaluate_risk(
                 f"min_cash_reserve_pct floor of {min_cash_required:.2f}"
             ),
         )
+
+    if limits.total_capital_usd is not None:
+        currently_deployed = portfolio.positions_value
+        projected_deployed = currently_deployed + requested_value
+        if projected_deployed > limits.total_capital_usd:
+            return RiskDecision(
+                approved=False,
+                reason=(
+                    f"would exceed total_capital_usd limit of {limits.total_capital_usd:.2f} "
+                    f"(currently deployed: {currently_deployed:.2f})"
+                ),
+            )
 
     quantity = requested_value / current_price
     return RiskDecision(approved=True, reason="approved", quantity=quantity)

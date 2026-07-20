@@ -22,7 +22,7 @@ def _create_strategy_version(db_session):
             "conditions": {"operator": "AND", "rules": [
                 {"indicator": "RSI", "period": 14, "operator": "less_than", "value": 30}
             ]},
-            "position_sizing": {"type": "fixed_allocation", "value_pct": 5},
+            "capital_allocation": {"type": "percentage_of_portfolio", "percentage": 5},
             "exit": {"stop_loss_pct": 3, "take_profit_pct": None},
         },
         source="manual",

@@ -584,3 +584,25 @@ placeholder only, final branding deferred.
   shows Featured Stocks; a query with matches shows only results; a
   query with no matches shows "No results found" with Featured Stocks
   still visible beneath it, so the page never dead-ends.
+
+## Capital allocation model (Phase 4) — implementation confirmed
+
+- PositionSizing renamed to CapitalAllocation throughout the backend
+  and frontend (AssetRule.capital_allocation, three types:
+  percentage_of_portfolio, fixed_capital, share_count). Naming
+  deliberately reflects ongoing capital management, not one-time
+  purchase size — see the earlier design entry for why.
+- Risk manager branches on allocation type to compute requested_value,
+  then flows through all pre-existing checks unchanged. New
+  PortfolioRules.total_capital_usd is an optional ceiling, checked via
+  RiskLimits.total_capital_usd, alongside (not replacing) existing
+  checks.
+- validation.py's allocation over-commitment check only sums
+  percentage_of_portfolio allocations — the only commensurable type
+  across assets; fixed_capital and share_count aren't meaningfully
+  addable into a portfolio-wide percentage.
+- Confirmed via Claude Code implementation pass: 215 tests passing,
+  ruff/mypy clean. Two stale tests deleted (asserted a min_length=1
+  constraint already deliberately relaxed back in Group 4 for
+  in-progress drafts) — not a regression, a cleanup of tests that had
+  outlived the design they were written against.

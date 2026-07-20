@@ -3,7 +3,7 @@ over synthetic bars — no Alpaca dependency at all."""
 
 from datetime import datetime, timedelta, timezone
 
-from app.schemas.strategy import AssetRule, ConditionGroup, ExitRules, PositionSizing, RuleCondition
+from app.schemas.strategy import AssetRule, CapitalAllocation, ConditionGroup, ExitRules, RuleCondition
 from app.trading_engine.backtest.engine import run_backtest
 from app.trading_engine.domain.market_bar import MarketBar
 from app.trading_engine.market_data.provider import MarketDataProvider
@@ -42,7 +42,7 @@ def _rsi_buy_dip_rule(stop_loss_pct: float | None = 3, take_profit_pct: float | 
             rules=[RuleCondition(indicator="RSI", period=14, operator="less_than", value=30)],
         ),
         sell_conditions=_never_true_group(),
-        position_sizing=PositionSizing(type="fixed_allocation", value_pct=10),
+        capital_allocation=CapitalAllocation(type="percentage_of_portfolio", percentage=10),
         exit=ExitRules(stop_loss_pct=stop_loss_pct, take_profit_pct=take_profit_pct),
     )
 

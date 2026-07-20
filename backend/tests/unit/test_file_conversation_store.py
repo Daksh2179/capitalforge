@@ -7,10 +7,10 @@ from app.agent.conversation_store import ConversationSession
 from app.agent.file_conversation_store import FileConversationStore
 from app.schemas.strategy import (
     AssetRule,
+    CapitalAllocation,
     ConditionGroup,
     ExitRules,
     PortfolioRules,
-    PositionSizing,
     RuleCondition,
     StrategyConfig,
 )
@@ -27,7 +27,7 @@ def _sample_draft() -> StrategyConfig:
                     rules=[RuleCondition(indicator="PRICE", period=1, operator="less_than", value=180)],
                 ),
                 sell_conditions=ConditionGroup(operator="AND", rules=[]),
-                position_sizing=PositionSizing(type="fixed_allocation", value_pct=10),
+                capital_allocation=CapitalAllocation(type="percentage_of_portfolio", percentage=10),
                 exit=ExitRules(),
             )
         ],
