@@ -2,6 +2,7 @@
 // translate mutation, confirm mutation. Components consume this hook,
 // never call api/agent.ts functions directly.
 
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { confirm, getConversationSession, translate } from "@/api/agent";
 import { getOrCreateConversationId, startNewConversation } from "@/lib/conversation";
@@ -9,7 +10,7 @@ import { useCurrentUser } from "@/lib/constants";
 import type { ConfirmRequest } from "@/types/agent";
 
 export function useConversation() {
-  const conversationId = getOrCreateConversationId();
+  const [conversationId, setConversationId] = useState(() => getOrCreateConversationId());
   const queryClient = useQueryClient();
   const { userId } = useCurrentUser();
 
@@ -42,7 +43,8 @@ export function useConversation() {
   });
 
   function resetConversation() {
-    startNewConversation();
+    const fresh = startNewConversation();
+    setConversationId(fresh);
     queryClient.invalidateQueries({ queryKey: ["agent", "conversations"] });
   }
 

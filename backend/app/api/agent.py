@@ -150,4 +150,6 @@ def _summarize_result_for_history(result: TranslationResult) -> str:
         return result.clarification_message or "Could you clarify that?"
     if result.status.value == "needs_disambiguation":
         return result.disambiguation_message or "Which asset did you mean?"
+    if result.status.value == "information":
+        return result.information_message or "Here's what I found."
     return result.error_message or "Something went wrong processing that."

@@ -44,6 +44,9 @@ export function ChatTab() {
   function handleClarificationSubmit(value: string) {
     void sendMessage(value);
   }
+  function handleNewConversation() {
+    resetConversation();
+  }
 
   async function handleConfirm() {
     const result = await confirmDraft(activeAgent?.id);
@@ -93,6 +96,12 @@ export function ChatTab() {
         {status === "error" && lastTranslateResult?.error_message && (
           <p className="text-sm text-destructive">{lastTranslateResult.error_message}</p>
         )}
+        
+        <div className="flex justify-end">
+          <Button variant="ghost" size="sm" onClick={handleNewConversation}>
+            New Conversation
+          </Button>
+        </div>
 
         <MessageInput
           onSend={(msg) => void sendMessage(msg)}

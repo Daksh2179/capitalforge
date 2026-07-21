@@ -1,8 +1,10 @@
 import { useActiveAgent } from "@/hooks/useActiveAgent";
+import { useCurrentVersion } from "@/hooks/useCurrentVersion";
 import { useDecisionLogs } from "@/hooks/useDecisionLogs";
 
 export function OverviewTab() {
   const { activeAgent, isLoading: agentLoading } = useActiveAgent();
+  const { data: currentVersion } = useCurrentVersion(activeAgent?.id ?? null);
   const { data: logs, isLoading: logsLoading } = useDecisionLogs(activeAgent?.id ?? null, 20);
 
   if (agentLoading) {
@@ -19,6 +21,8 @@ export function OverviewTab() {
       </div>
     );
   }
+
+  const symbols = currentVersion?.config_json.asset_rules.map((r) => r.symbol) ?? [];
 
   const lastExecutedTrade = logs?.find((log) => log.action_taken !== "hold");
   const lastDecision = logs?.[0];
@@ -37,6 +41,24 @@ export function OverviewTab() {
     <div className="space-y-6">
       <div className="rounded-lg border border-border p-6">
         <span className={`text-lg font-semibold ${statusColor}`}>{statusLabel}</span>
+      </div>
+
+      <div className="rounded-lg border border-border p-6">
+        <h3 className="mb-2 text-sm font-medium text-muted-foreground">Managing</h3>
+        {symbols.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No symbols configured yet.</p>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {symbols.map((symbol) => (
+              <span
+                key={symbol}
+                className="rounded-full bg-muted px-3 py-1 text-sm font-medium"
+              >
+                {symbol}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="rounded-lg border border-border p-6">
