@@ -1,4 +1,6 @@
 import { useConversation } from "@/hooks/useConversation";
+import { useActiveAgent } from "@/hooks/useActiveAgent";
+import { useCurrentVersion } from "@/hooks/useCurrentVersion";
 import { useLocation } from "react-router-dom";
 import { MessageList } from "./MessageList";
 import { MessageInput } from "./MessageInput";
@@ -24,7 +26,15 @@ export function ChatTab() {
   const location = useLocation();
   const prefillMessage = (location.state as { prefillMessage?: string } | null)?.prefillMessage;
 
-  const draft = lastTranslateResult?.draft ?? session?.draft ?? null;
+  const { activeAgent } = useActiveAgent();
+  const { data: currentVersion } = useCurrentVersion(
+    !session?.draft && activeAgent ? activeAgent.id : null
+  );
+
+  // Draft in progress takes priority (actively being edited); otherwise
+  // fall back to the real confirmed rules, so the panel is never empty
+  // once an agent has been confirmed, regardless of conversation state.
+  const draft = lastTranslateResult?.draft ?? session?.draft ?? currentVersion?.config_json ?? null;
   const status = lastTranslateResult?.status;
 
   function handleDisambiguationSelect(symbol: string) {
@@ -36,7 +46,7 @@ export function ChatTab() {
   }
 
   async function handleConfirm() {
-    const result = await confirmDraft(undefined);
+    const result = await confirmDraft(activeAgent?.id);
     if (result.confirmed) {
       resetConversation();
     }
