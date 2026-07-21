@@ -14,6 +14,7 @@ class TranslationStatus(str, enum.Enum):
     UPDATED_DRAFT = "updated_draft"
     NEEDS_CLARIFICATION = "needs_clarification"
     NEEDS_DISAMBIGUATION = "needs_disambiguation"
+    INFORMATION = "information"
     ERROR = "error"
 
 
@@ -40,5 +41,7 @@ class TranslationResult(BaseModel):
     clarification_message: str | None = None
     disambiguation_message: str | None = None
     disambiguation_candidates: list[str] = []
+    
+    information_message: str | None = None
 
     error_message: str | None = None

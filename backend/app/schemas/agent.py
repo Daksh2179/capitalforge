@@ -13,6 +13,7 @@ class TranslateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     conversation_id: str
+    user_id: uuid.UUID
     message: str
 
 
@@ -26,6 +27,7 @@ class TranslateResponse(BaseModel):
     disambiguation_message: str | None = None
     disambiguation_candidates: list[str] = []
     error_message: str | None = None
+    information_message: str | None = None
 
 
 class ConfirmRequest(BaseModel):

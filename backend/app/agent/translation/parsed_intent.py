@@ -20,6 +20,7 @@ Operation = Literal[
     "pause_strategy",
     "resume_strategy",
     "request_clarification",
+    "request_information",
 ]
 
 AllocationType = Literal["percentage_of_portfolio", "fixed_capital", "share_count"]

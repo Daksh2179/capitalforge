@@ -39,7 +39,8 @@ class FakeMarketDataProvider(MarketDataProvider):
                       open=100, high=110, low=90, close=100 + i, volume=0.0)
             for i in range(5)
         ]
-        
+
+
 class FakeAssetDirectory:
     """Returns the input symbol unchanged, uppercased — enough for
     tests that don't exercise real company-name resolution."""
@@ -79,7 +80,7 @@ def _valid_config_payload() -> dict:
                 "operator": "AND",
                 "rules": [{"indicator": "PRICE", "period": 1, "operator": "greater_than", "value": 195}],
             },
-            "capital_allocation": {"type": "percentage_of_portfolio", "percentage": 10},
+            "position_sizing": {"type": "fixed_allocation", "value_pct": 10},
             "exit": {"stop_loss_pct": 5, "take_profit_pct": None},
         }],
     }
@@ -88,9 +89,10 @@ def _valid_config_payload() -> dict:
 def test_translate_returns_updated_draft_and_persists_session(client: TestClient):
     _override_translation_service(_buy_aapl_batch())
     conversation_id = f"conv-{uuid.uuid4()}"
+    user_id = str(uuid.uuid4())
 
     response = client.post("/agent/translate", json={
-        "conversation_id": conversation_id, "message": "Buy Apple below $180",
+        "conversation_id": conversation_id, "user_id": user_id, "message": "Buy Apple below $180",
     })
 
     del app.dependency_overrides[_get_translation_service]
@@ -103,10 +105,11 @@ def test_translate_returns_updated_draft_and_persists_session(client: TestClient
 
 def test_translate_twice_accumulates_history_and_draft(client: TestClient):
     conversation_id = f"conv-{uuid.uuid4()}"
+    user_id = str(uuid.uuid4())
 
     _override_translation_service(_buy_aapl_batch())
     client.post("/agent/translate", json={
-        "conversation_id": conversation_id, "message": "Buy Apple below $180",
+        "conversation_id": conversation_id, "user_id": user_id, "message": "Buy Apple below $180",
     })
     del app.dependency_overrides[_get_translation_service]
 
@@ -119,7 +122,7 @@ def test_translate_twice_accumulates_history_and_draft(client: TestClient):
     ])
     _override_translation_service(sell_batch)
     second_response = client.post("/agent/translate", json={
-        "conversation_id": conversation_id, "message": "Sell above $195",
+        "conversation_id": conversation_id, "user_id": user_id, "message": "Sell above $195",
     })
     del app.dependency_overrides[_get_translation_service]
 
@@ -132,9 +135,10 @@ def test_translate_twice_accumulates_history_and_draft(client: TestClient):
 
 def test_get_conversation_session_returns_persisted_state(client: TestClient):
     conversation_id = f"conv-{uuid.uuid4()}"
+    user_id = str(uuid.uuid4())
     _override_translation_service(_buy_aapl_batch())
     client.post("/agent/translate", json={
-        "conversation_id": conversation_id, "message": "Buy Apple below $180",
+        "conversation_id": conversation_id, "user_id": user_id, "message": "Buy Apple below $180",
     })
     del app.dependency_overrides[_get_translation_service]
 
@@ -157,11 +161,11 @@ def test_get_conversation_session_returns_empty_for_unknown_id(client: TestClien
 
 def _confirm_via_chat(client: TestClient, user_id: str) -> tuple[str, str]:
     """Helper: drives a conversation to a confirmable draft, returns
-    (conversation_id, draft_json_asset_rules_symbol) for reuse."""
+    (conversation_id, user_id) for reuse."""
     conversation_id = f"conv-{uuid.uuid4()}"
     _override_translation_service(_buy_aapl_batch())
     client.post("/agent/translate", json={
-        "conversation_id": conversation_id, "message": "Buy Apple below $180",
+        "conversation_id": conversation_id, "user_id": user_id, "message": "Buy Apple below $180",
     })
     del app.dependency_overrides[_get_translation_service]
 
@@ -174,7 +178,7 @@ def _confirm_via_chat(client: TestClient, user_id: str) -> tuple[str, str]:
     ])
     _override_translation_service(sell_batch)
     client.post("/agent/translate", json={
-        "conversation_id": conversation_id, "message": "Sell above $195",
+        "conversation_id": conversation_id, "user_id": user_id, "message": "Sell above $195",
     })
     del app.dependency_overrides[_get_translation_service]
 
@@ -214,15 +218,16 @@ def test_confirm_with_no_session_returns_400(client: TestClient):
 
 def test_confirm_with_invalid_draft_is_rejected_and_not_persisted(client: TestClient):
     conversation_id = f"conv-{uuid.uuid4()}"
+    user_id = str(uuid.uuid4())
     # A buy-only, no-sell-condition draft is invalid (missing sell conditions -> ERROR).
     _override_translation_service(_buy_aapl_batch())
     client.post("/agent/translate", json={
-        "conversation_id": conversation_id, "message": "Buy Apple below $180",
+        "conversation_id": conversation_id, "user_id": user_id, "message": "Buy Apple below $180",
     })
     del app.dependency_overrides[_get_translation_service]
 
     response = client.post("/agent/confirm", json={
-        "user_id": str(uuid.uuid4()), "conversation_id": conversation_id,
+        "user_id": user_id, "conversation_id": conversation_id,
     })
 
     assert response.status_code == 200
@@ -243,12 +248,12 @@ def test_confirm_for_existing_strategy_creates_new_version(client: TestClient, d
     size_batch = IntentBatch(intents=[
         ParsedIntent(
             operation="set_capital_allocation", intent_type="objective", symbol="AAPL",
-            allocation_type="percentage_of_portfolio", percentage=20, raw_text="Make that 20%",
+            percentage=20, allocation_type="percentage_of_portfolio", raw_text="Make that 20%",
         )
     ])
     _override_translation_service(size_batch)
     client.post("/agent/translate", json={
-        "conversation_id": conversation_id, "message": "Make that 20%",
+        "conversation_id": conversation_id, "user_id": user_id, "message": "Make that 20%",
     })
     del app.dependency_overrides[_get_translation_service]
 
@@ -280,4 +285,3 @@ def test_confirm_for_unknown_strategy_id_returns_404(client: TestClient):
     })
 
     assert response.status_code == 404
-    

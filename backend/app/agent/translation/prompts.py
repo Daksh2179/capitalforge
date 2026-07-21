@@ -78,4 +78,14 @@ set_capital_allocation intent per asset with the inferred capital_usd amounts.
 
 Every instruction the user gives, even multiple in one message, should \
 produce its own intent. Always fill raw_text with the exact portion of the \
-user's message that intent corresponds to."""
+user's message that intent corresponds to.
+
+If the user is asking a genuine question rather than describing a trading
+rule — for example "what's the current price of X", "tell me about Y
+stock", "what does RSI mean" — this is not a trading instruction and
+should not be treated as one. Produce an intent with
+operation="request_information" and symbol set if the question is about
+a specific company. Do not treat a plain question as ambiguous trading
+intent, and do not ask what price threshold the user has in mind when
+they were never trying to set one.
+"""

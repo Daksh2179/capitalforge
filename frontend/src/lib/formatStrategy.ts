@@ -39,16 +39,41 @@ function formatCondition(rule: RuleCondition): string {
   }
 }
 
-export function formatCapitalAllocation(allocation: CapitalAllocation): string {
+/**
+ * Never throws. Malformed or unexpected input (missing fields, old
+ * pre-rename shapes, an unrecognized type) returns an explicit,
+ * visible fallback string rather than crashing the DraftPane — this
+ * keeps the UI alive while still making it obvious during development
+ * that something is wrong, rather than silently hiding it.
+ */
+export function formatCapitalAllocation(
+  allocation: CapitalAllocation | null | undefined
+): string {
+  if (!allocation || typeof allocation !== "object" || !("type" in allocation)) {
+    if (import.meta.env.DEV) {
+      console.warn("formatCapitalAllocation received malformed data:", allocation);
+    }
+    return "Invalid capital allocation";
+  }
+
   switch (allocation.type) {
     case "percentage_of_portfolio":
-      return `${allocation.percentage}% of portfolio`;
+      return typeof allocation.percentage === "number"
+        ? `${allocation.percentage}% of portfolio`
+        : "Invalid capital allocation";
     case "fixed_capital":
-      return `$${allocation.capital_usd?.toLocaleString()} allocated`;
+      return typeof allocation.capital_usd === "number"
+        ? `$${allocation.capital_usd.toLocaleString()} allocated`
+        : "Invalid capital allocation";
     case "share_count":
-      return `${allocation.shares} shares`;
+      return typeof allocation.shares === "number"
+        ? `${allocation.shares} shares`
+        : "Invalid capital allocation";
     default:
-      return "";
+      if (import.meta.env.DEV) {
+        console.warn("formatCapitalAllocation received unknown type:", allocation);
+      }
+      return "Unknown allocation";
   }
 }
 

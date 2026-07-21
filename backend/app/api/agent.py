@@ -3,6 +3,8 @@ all real logic lives in TranslationService, validate_strategy,
 strategy_service, and ConversationStore.
 """
 
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -13,7 +15,9 @@ from app.agent.translation.translation_result import TranslationResult
 from app.agent.translation.translation_service import TranslationService
 from app.agent.translation.validation import Severity, validate_strategy
 from app.api.deps import get_db
+from app.assets.asset_directory import AssetDirectory
 from app.core.config import get_settings
+from app.models.strategy import StrategyState
 from app.schemas.agent import (
     ConfirmAcceptedResponse,
     ConfirmRejectedResponse,
@@ -22,11 +26,9 @@ from app.schemas.agent import (
     TranslateRequest,
     TranslateResponse,
 )
-from app.schemas.strategy import StrategyResponse, StrategyVersionSource
+from app.schemas.strategy import StrategyConfig, StrategyResponse, StrategyVersionSource
 from app.services import strategy_service
 from app.trading_engine.market_data.alpaca_market_data import AlpacaMarketData
-from app.models.strategy import StrategyState
-from app.assets.asset_directory import AssetDirectory
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
@@ -43,13 +45,33 @@ def _get_conversation_store() -> ConversationStore:
     return FileConversationStore()
 
 
+def _load_active_strategy_config(db: Session, user_id: uuid.UUID) -> StrategyConfig | None:
+    """A brand-new conversation always inherits the user's existing
+    active strategy as its starting draft, since V1 supports exactly
+    one active strategy at a time. There is currently no way to start
+    a conversation "clean" except by explicitly asking the agent to
+    remove all rules first — this is a deliberate choice, not an
+    oversight, matching the single-active-strategy constraint used
+    throughout the rest of the app.
+    """
+    strategies = strategy_service.list_strategies(db, user_id=user_id)
+    active = next((s for s in strategies if s.state != StrategyState.DRAFT), None)
+    if active is None or active.current_version is None:
+        return None
+    return StrategyConfig.model_validate(active.current_version.config_json)
+
+
 @router.post("/translate", response_model=TranslateResponse)
 def translate(
     request: TranslateRequest,
+    db: Session = Depends(get_db),
     service: TranslationService = Depends(_get_translation_service),
     store: ConversationStore = Depends(_get_conversation_store),
 ) -> TranslateResponse:
     session = store.get(request.conversation_id) or ConversationSession()
+
+    if session.draft is None and not session.messages:
+        session.draft = _load_active_strategy_config(db, request.user_id)
 
     result, new_state = service.translate(
         request.message, session.messages, session.draft, session.state

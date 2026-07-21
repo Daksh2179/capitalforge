@@ -22,6 +22,7 @@ class FragmentKind(str, enum.Enum):
     PAUSE_STRATEGY = "pause_strategy"
     RESUME_STRATEGY = "resume_strategy"
     CLARIFICATION_NEEDED = "clarification_needed"
+    INFORMATION_REQUESTED = "information_requested"
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,13 @@ def translate_intent(intent: ParsedIntent) -> IntentFragment:
             symbol=intent.symbol,
             raw_text=intent.raw_text,
             clarification_context=intent.clarification_context,
+        )
+        
+    if intent.operation == "request_information":
+        return IntentFragment(
+            kind=FragmentKind.INFORMATION_REQUESTED,
+            symbol=intent.symbol,
+            raw_text=intent.raw_text,
         )
 
     kind = _OPERATION_TO_KIND.get(intent.operation)

@@ -1,6 +1,5 @@
 import { useConversation } from "@/hooks/useConversation";
-import { useActiveAgent } from "@/hooks/useActiveAgent";
-import { useCurrentVersion } from "@/hooks/useCurrentVersion";
+import { useLocation } from "react-router-dom";
 import { MessageList } from "./MessageList";
 import { MessageInput } from "./MessageInput";
 import { AppliedOperationsDiff } from "./AppliedOperationsDiff";
@@ -8,7 +7,6 @@ import { ClarificationCard } from "./ClarificationCard";
 import { DisambiguationCard } from "./DisambiguationCard";
 import { DraftPane } from "./DraftPane";
 import { Button } from "@/components/ui/button";
-import { useLocation } from "react-router-dom";
 
 export function ChatTab() {
   const {
@@ -26,15 +24,7 @@ export function ChatTab() {
   const location = useLocation();
   const prefillMessage = (location.state as { prefillMessage?: string } | null)?.prefillMessage;
 
-  const { activeAgent } = useActiveAgent();
-  const { data: currentVersion } = useCurrentVersion(
-    !session?.draft && activeAgent ? activeAgent.id : null
-  );
-
-  // Draft in progress takes priority (actively being edited); otherwise
-  // fall back to the real confirmed rules, so the panel is never empty
-  // once an agent has been confirmed, regardless of conversation state.
-  const draft = lastTranslateResult?.draft ?? session?.draft ?? currentVersion?.config_json ?? null;
+  const draft = lastTranslateResult?.draft ?? session?.draft ?? null;
   const status = lastTranslateResult?.status;
 
   function handleDisambiguationSelect(symbol: string) {
@@ -78,6 +68,12 @@ export function ChatTab() {
             onSelect={handleDisambiguationSelect}
             disabled={isSending}
           />
+        )}
+
+        {status === "information" && lastTranslateResult?.information_message && (
+          <div className="rounded-md border border-border bg-muted/30 p-3 text-sm">
+            {lastTranslateResult.information_message}
+          </div>
         )}
 
         {status === "updated_draft" && lastTranslateResult && (

@@ -19,7 +19,7 @@ export function useConversation() {
   });
 
   const translateMutation = useMutation({
-    mutationFn: (message: string) => translate({ conversation_id: conversationId, message }),
+    mutationFn: (message: string) => translate({ conversation_id: conversationId, user_id: userId, message }),
     onSuccess: () => {
       queryClient.invalidateQueries({
         queryKey: ["agent", "conversations", conversationId],

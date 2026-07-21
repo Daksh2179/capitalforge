@@ -70,6 +70,16 @@ class TranslationService:
         for intent in batch.intents:
             fragment = translate_intent(intent)
 
+            if fragment.kind == FragmentKind.INFORMATION_REQUESTED:
+                info_text = self._answer_information_request(fragment.symbol, fragment.raw_text)
+                result = TranslationResult(
+                    status=TranslationStatus.INFORMATION,
+                    draft=current_draft,
+                    applied_operations=applied,
+                    information_message=info_text,
+                )
+                return result, new_state
+
             if fragment.kind == FragmentKind.CLARIFICATION_NEEDED:
                 context = get_market_context(fragment.symbol, self._market_data) if fragment.symbol else None
                 new_state.pending_clarification = PendingClarification(
@@ -105,8 +115,6 @@ class TranslationService:
                 operation=fragment.kind.value, symbol=fragment.symbol, description=outcome.description
             ))
 
-            # Deterministic state update: derived from what actually
-            # happened this turn, never from the LLM's own report.
             new_state.pending_clarification = None
             if fragment.symbol:
                 new_state.focused_symbol = fragment.symbol
@@ -134,6 +142,35 @@ class TranslationService:
         if not matches:
             return None
         return matches[0].symbol
+
+    def _answer_information_request(self, symbol: str | None, question: str) -> str:
+        """Answers a genuine question using only real, gathered data —
+        never fabricated. If no real data is available for what was
+        asked, says so honestly rather than guessing.
+        """
+        facts: dict[str, str] = {}
+
+        if symbol:
+            resolved = self._resolve_symbol(symbol)
+            if resolved:
+                context = get_market_context(resolved, self._market_data)
+                if context:
+                    facts["symbol"] = resolved
+                    facts["current_price"] = f"${context.current_price:.2f}"
+                    facts["week_52_range"] = f"${context.week_52_low:.2f}-${context.week_52_high:.2f}"
+
+        prompt = (
+            "Answer the user's question using ONLY the facts provided below. "
+            "If the facts don't contain what's needed to answer, say so honestly "
+            "rather than guessing or inventing information.\n\n"
+            f"User's question: {question}\n\n"
+            f"Known facts: {facts if facts else 'none available'}"
+        )
+
+        return self._llm_service.generate_text([
+            {"role": "system", "content": "You answer questions using only the facts given. Never invent information."},
+            {"role": "user", "content": prompt},
+        ])
 
 
 def _render_state_context(state: ConversationState) -> str:

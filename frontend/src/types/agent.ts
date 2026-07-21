@@ -6,6 +6,7 @@ export type TranslationStatus =
   | "updated_draft"
   | "needs_clarification"
   | "needs_disambiguation"
+  | "information"
   | "error";
 
 export interface AppliedOperation {
@@ -16,6 +17,7 @@ export interface AppliedOperation {
 
 export interface TranslateRequest {
   conversation_id: string;
+  user_id: string;
   message: string;
 }
 
@@ -27,6 +29,7 @@ export interface TranslateResponse {
   disambiguation_message?: string | null;
   disambiguation_candidates: string[];
   error_message?: string | null;
+  information_message?: string | null;
 }
 
 export interface ConversationSessionResponse {
