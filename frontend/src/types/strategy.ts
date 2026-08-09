@@ -59,7 +59,7 @@ export interface PortfolioRules {
 }
 
 export interface StrategyConfig {
-  schema_version: 2;
+  schema_version: 3;
   portfolio_rules: PortfolioRules;
   asset_rules: AssetRule[];
 }

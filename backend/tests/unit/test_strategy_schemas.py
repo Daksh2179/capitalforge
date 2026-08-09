@@ -31,7 +31,7 @@ def _valid_asset_rule(symbol: str = "AAPL") -> dict:
 
 def _valid_config_dict() -> dict:
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "portfolio_rules": {"cash_reserve_pct": 10, "max_allocation_pct": 25, "max_open_positions": 5},
         "asset_rules": [_valid_asset_rule("AAPL")],
     }
@@ -40,7 +40,7 @@ def _valid_config_dict() -> dict:
 def test_valid_config_parses_successfully():
     config = StrategyConfig.model_validate(_valid_config_dict())
 
-    assert config.schema_version == 2
+    assert config.schema_version == 3
     assert config.portfolio_rules.cash_reserve_pct == 10
     assert len(config.asset_rules) == 1
     assert config.asset_rules[0].symbol == "AAPL"
@@ -216,3 +216,29 @@ class TestCapitalAllocation:
 def test_exit_rules_negative_percentages_rejected():
     with pytest.raises(ValidationError):
         ExitRules(stop_loss_pct=-1)
+        
+def test_asset_rule_gets_default_identity_when_not_provided():
+    config = StrategyConfig.model_validate(_valid_config_dict())
+
+    rule = config.asset_rules[0]
+    assert rule.id is not None
+    assert rule.created_at is not None
+    assert rule.updated_at is not None
+
+
+def test_asset_rule_preserves_explicit_identity_when_provided():
+    import uuid as uuid_module
+    from datetime import datetime, timezone
+
+    fixed_id = uuid_module.uuid4()
+    fixed_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    data = _valid_config_dict()
+    data["asset_rules"][0]["id"] = str(fixed_id)
+    data["asset_rules"][0]["created_at"] = fixed_time.isoformat()
+    data["asset_rules"][0]["updated_at"] = fixed_time.isoformat()
+
+    config = StrategyConfig.model_validate(data)
+
+    assert config.asset_rules[0].id == fixed_id
+    assert config.asset_rules[0].created_at == fixed_time

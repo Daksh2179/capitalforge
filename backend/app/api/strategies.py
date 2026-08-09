@@ -28,7 +28,7 @@ def create_strategy(
     strategy = strategy_service.create_strategy(
         db,
         user_id=request.user_id,
-        config_json=request.config.model_dump(),
+        config_json=request.config.model_dump(mode="json"),
         source=request.source,
     )
     return StrategyResponse.model_validate(strategy)
@@ -71,7 +71,7 @@ def create_strategy_version(
     version = strategy_service.create_new_version(
         db,
         strategy=strategy,
-        config_json=request.config.model_dump(),
+        config_json=request.config.model_dump(mode="json"),
         source=request.source,
     )
     return StrategyVersionResponse.model_validate(version)

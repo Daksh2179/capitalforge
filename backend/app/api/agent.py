@@ -124,12 +124,12 @@ def confirm(
         if strategy is None:
             raise HTTPException(status_code=404, detail="Strategy not found")
         strategy_service.create_new_version(
-            db, strategy=strategy, config_json=session.draft.model_dump(),
+            db, strategy=strategy, config_json=session.draft.model_dump(mode="json"),
             source=StrategyVersionSource.CHAT, confirmed_now=True,
         )
     else:
         strategy = strategy_service.create_strategy(
-            db, user_id=request.user_id, config_json=session.draft.model_dump(),
+            db, user_id=request.user_id, config_json=session.draft.model_dump(mode="json"),
             source=StrategyVersionSource.CHAT, confirmed_now=True,
         )
 

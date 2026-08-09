@@ -10,7 +10,7 @@ from app.models.strategy import StrategyVersion
 
 def _valid_config_payload() -> dict:
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "portfolio_rules": {"cash_reserve_pct": 10, "max_allocation_pct": 25, "max_open_positions": 5},
         "asset_rules": [{
             "symbol": "AAPL",

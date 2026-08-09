@@ -68,7 +68,7 @@ def _buy_aapl_batch() -> IntentBatch:
 
 def _valid_config_payload() -> dict:
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "portfolio_rules": {"cash_reserve_pct": None, "max_allocation_pct": None, "max_open_positions": None},
         "asset_rules": [{
             "symbol": "AAPL",

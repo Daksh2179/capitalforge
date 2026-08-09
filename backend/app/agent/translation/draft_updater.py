@@ -6,6 +6,7 @@ draft, this signals ambiguity rather than guessing.
 """
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from app.agent.translation.intent_translator import FragmentKind, IntentFragment
 from app.schemas.strategy import (
@@ -18,6 +19,10 @@ from app.schemas.strategy import (
 )
 
 _DEFAULT_ALLOCATION_PCT = 5.0
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class AmbiguousAssetError(Exception):
@@ -78,6 +83,9 @@ def _describe_allocation(allocation: CapitalAllocation) -> str:
 
 
 def _empty_asset_rule(symbol: str) -> AssetRule:
+    # id/created_at/updated_at all use AssetRule's own defaults here
+    # (a genuinely new rule's identity and creation time), so this
+    # function doesn't need to set them explicitly.
     return AssetRule(
         symbol=symbol,
         buy_conditions=ConditionGroup(operator="AND", rules=[]),
@@ -121,29 +129,51 @@ def _apply_asset_fragment(draft: StrategyConfig | None, symbol: str, fragment: I
     rule, other_rules = _get_or_create_asset_rule(draft, symbol)
     portfolio_rules = draft.portfolio_rules if draft else PortfolioRules()
 
+    # Every branch below bumps updated_at as part of the same
+    # model_copy call. id and created_at are never named in `update=`,
+    # so model_copy carries them over unchanged from `rule` — for a
+    # brand-new rule that's the value _empty_asset_rule just set; for
+    # an edit to an existing rule, it's the rule's original identity
+    # and original creation time, exactly as intended.
+
     if fragment.kind == FragmentKind.BUY_CONDITION:
         assert fragment.condition is not None
         new_rules = _merge_condition(rule.buy_conditions.rules, fragment.condition)
-        rule = rule.model_copy(update={"buy_conditions": rule.buy_conditions.model_copy(update={"rules": new_rules})})
+        rule = rule.model_copy(update={
+            "buy_conditions": rule.buy_conditions.model_copy(update={"rules": new_rules}),
+            "updated_at": _utcnow(),
+        })
         description = f"Added buy condition for {symbol}: {fragment.raw_text}"
 
     elif fragment.kind == FragmentKind.SELL_CONDITION:
         assert fragment.condition is not None
         new_rules = _merge_condition(rule.sell_conditions.rules, fragment.condition)
-        rule = rule.model_copy(update={"sell_conditions": rule.sell_conditions.model_copy(update={"rules": new_rules})})
+        rule = rule.model_copy(update={
+            "sell_conditions": rule.sell_conditions.model_copy(update={"rules": new_rules}),
+            "updated_at": _utcnow(),
+        })
         description = f"Added sell condition for {symbol}: {fragment.raw_text}"
 
     elif fragment.kind == FragmentKind.STOP_LOSS:
-        rule = rule.model_copy(update={"exit": rule.exit.model_copy(update={"stop_loss_pct": fragment.percentage_value})})
+        rule = rule.model_copy(update={
+            "exit": rule.exit.model_copy(update={"stop_loss_pct": fragment.percentage_value}),
+            "updated_at": _utcnow(),
+        })
         description = f"Set stop loss for {symbol} to {fragment.percentage_value}%"
 
     elif fragment.kind == FragmentKind.TAKE_PROFIT:
-        rule = rule.model_copy(update={"exit": rule.exit.model_copy(update={"take_profit_pct": fragment.percentage_value})})
+        rule = rule.model_copy(update={
+            "exit": rule.exit.model_copy(update={"take_profit_pct": fragment.percentage_value}),
+            "updated_at": _utcnow(),
+        })
         description = f"Set take profit for {symbol} to {fragment.percentage_value}%"
 
     elif fragment.kind == FragmentKind.CAPITAL_ALLOCATION:
         assert fragment.capital_allocation is not None
-        rule = rule.model_copy(update={"capital_allocation": fragment.capital_allocation})
+        rule = rule.model_copy(update={
+            "capital_allocation": fragment.capital_allocation,
+            "updated_at": _utcnow(),
+        })
         description = f"Set capital allocation for {symbol} to {_describe_allocation(fragment.capital_allocation)}"
 
     else:

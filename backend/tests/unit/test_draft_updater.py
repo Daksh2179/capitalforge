@@ -149,3 +149,31 @@ def test_portfolio_rule_max_open_positions_field_applies():
     outcome = apply_fragment(None, fragment)
 
     assert outcome.config.portfolio_rules.max_open_positions == 3
+    
+def test_editing_a_rule_preserves_id_and_created_at_but_bumps_updated_at():
+    first = apply_fragment(None, _condition_fragment(FragmentKind.BUY_CONDITION, "AAPL", value=180))
+    original_rule = first.config.asset_rules[0]
+
+    second = apply_fragment(
+        first.config,
+        IntentFragment(
+            kind=FragmentKind.STOP_LOSS, symbol="AAPL", raw_text="set 5% stop loss",
+            percentage_value=5,
+        ),
+    )
+    edited_rule = second.config.asset_rules[0]
+
+    assert edited_rule.id == original_rule.id
+    assert edited_rule.created_at == original_rule.created_at
+    assert edited_rule.updated_at >= original_rule.updated_at
+
+
+def test_two_rules_created_in_order_have_distinct_stable_ids():
+    first = apply_fragment(None, _condition_fragment(FragmentKind.BUY_CONDITION, "AAPL"))
+    second = apply_fragment(first.config, _condition_fragment(FragmentKind.BUY_CONDITION, "NVDA"))
+
+    aapl = next(r for r in second.config.asset_rules if r.symbol == "AAPL")
+    nvda = next(r for r in second.config.asset_rules if r.symbol == "NVDA")
+
+    assert aapl.id != nvda.id
+    assert aapl.created_at <= nvda.created_at
