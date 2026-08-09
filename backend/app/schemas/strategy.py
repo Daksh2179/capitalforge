@@ -1,7 +1,7 @@
 """Pydantic schemas for strategy requests/responses."""
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -9,6 +9,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.models.strategy import StrategyState, StrategyVersionSource
 
 # --- Rule config schema (the shape of StrategyVersion.config_json) ---
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class RuleCondition(BaseModel):
@@ -106,9 +110,28 @@ class ExitRules(BaseModel):
 
 
 class AssetRule(BaseModel):
-    """Trading rules for a single asset within a Portfolio Strategy."""
+    """Trading rules for a single asset within a Portfolio Strategy.
+
+    id/created_at/updated_at give each rule a stable identity that
+    survives edits, independent of its position in asset_rules (which
+    changes on every edit — see draft_updater._apply_asset_fragment).
+    This is what any deterministic ordering policy (FIFO, audit trails,
+    per-rule history) has to key off instead of list position.
+
+    All three have defaults so nothing that constructs an AssetRule
+    without specifying them breaks (tests, any future dict-based
+    construction path) — but draft_updater is responsible for actually
+    preserving id/created_at across edits and bumping updated_at on
+    every one. The schema only guarantees a rule always HAS valid
+    values, not that they're semantically stable across edits; that
+    guarantee lives in draft_updater.
+    """
 
     model_config = ConfigDict(extra="forbid")
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4)
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
 
     symbol: str = Field(min_length=1, max_length=10)
     buy_conditions: ConditionGroup
@@ -136,11 +159,17 @@ class StrategyConfig(BaseModel):
     """The full structured shape of a Portfolio Strategy, stored as
     StrategyVersion.config_json. schema_version allows this shape to
     evolve over time without requiring a database migration.
+
+    Bumped 2 -> 3: AssetRule gained id/created_at/updated_at. Any
+    StrategyVersion row persisted before this change has config_json
+    with schema_version=2 and will fail validation on load — by
+    design, same as the 1 -> 2 bump. This only affects local dev/test
+    data; there's no production data to migrate.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[2] = 2
+    schema_version: Literal[3] = 3
     portfolio_rules: PortfolioRules
     asset_rules: list[AssetRule] = Field(default_factory=list)
 
@@ -203,6 +232,7 @@ class DecisionLogResponse(BaseModel):
     action_taken: str
     risk_approved: bool
     risk_reason: str
+    plan_outcome: str | None
     explanation_text: str | None
     created_at: datetime
 

@@ -2,11 +2,20 @@
 Takes a proposed BUY or SELL signal plus current portfolio state and
 either approves it (returning a sized quantity) or rejects it with a
 reason. Never overridden by anything upstream — unbypassable by design.
+
+The Opportunity Engine's planner also calls evaluate_risk directly,
+against its own simulated portfolio copy, to decide what fits into an
+Execution Plan before any real order is placed. That's intentional
+reuse, not a coincidence: the planner should never have its own
+opinion about capital/position-count/cash-reserve feasibility that
+could drift from what this function actually enforces at execution
+time.
 """
 
 from dataclasses import dataclass
 
 from app.schemas.strategy import AssetRule
+from app.trading_engine.capital_allocation import resolve_requested_capital
 from app.trading_engine.domain.portfolio import Portfolio
 from app.trading_engine.domain.signal import Signal, SignalAction
 from app.trading_engine.risk.risk_limits import RiskLimits
@@ -59,16 +68,7 @@ def evaluate_risk(
                 ),
             )
 
-    allocation = rule.capital_allocation
-    if allocation.type == "percentage_of_portfolio":
-        assert allocation.percentage is not None
-        requested_value = total_value * (allocation.percentage / 100)
-    elif allocation.type == "fixed_capital":
-        assert allocation.capital_usd is not None
-        requested_value = allocation.capital_usd
-    else:  # share_count
-        assert allocation.shares is not None
-        requested_value = allocation.shares * current_price
+    requested_value = resolve_requested_capital(rule.capital_allocation, total_value, current_price)
 
     existing_position = portfolio.positions.get(signal.symbol)
     existing_value = existing_position.market_value or 0.0 if existing_position else 0.0

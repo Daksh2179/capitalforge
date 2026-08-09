@@ -102,3 +102,34 @@ def test_record_portfolio_snapshot_persists_correctly(db_session):
     assert snapshot.cash_balance == 5000.0
     assert snapshot.total_value == 5525.0
     assert snapshot.positions_json["AAPL"]["quantity"] == 5
+    
+def test_log_decision_persists_plan_outcome(db_session):
+    strategy = _create_strategy_version(db_session)
+    signal = Signal(
+        symbol="AAPL", action=SignalAction.BUY,
+        timestamp=datetime.now(timezone.utc), evaluated=True,
+        triggered_rules=["RSI(14) < 30 (actual=25.0)"],
+    )
+
+    log = trading_cycle_service.log_decision(
+        db_session, strategy_version_id=strategy.current_version_id,
+        latest_bar=_bar(), signal=signal, risk_decision=None,
+        plan_outcome="deferred",
+    )
+
+    assert log.plan_outcome == "deferred"
+
+
+def test_log_decision_plan_outcome_defaults_to_none(db_session):
+    strategy = _create_strategy_version(db_session)
+    signal = Signal(
+        symbol="AAPL", action=SignalAction.HOLD,
+        timestamp=datetime.now(timezone.utc), evaluated=True,
+    )
+
+    log = trading_cycle_service.log_decision(
+        db_session, strategy_version_id=strategy.current_version_id,
+        latest_bar=_bar(), signal=signal, risk_decision=None,
+    )
+
+    assert log.plan_outcome is None

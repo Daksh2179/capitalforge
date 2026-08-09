@@ -1,9 +1,19 @@
 """Evaluation job: the orchestrator. Coordinates the pipeline for one
-Portfolio Strategy, one cycle, looping over every AssetRule inside it.
-Contains no trading decisions, no indicator math, no risk logic itself
-- only calls the components that do, in sequence, once per asset.
+Portfolio Strategy, one cycle.
 
-MarketDataProvider -> Rule Evaluator (entry or exit) -> Risk Manager -> Broker -> Persistence
+Collect signals -> execute SELLs -> refresh portfolio -> Opportunity
+Engine builds an Execution Plan -> execute the plan's selected BUYs ->
+one portfolio snapshot for the whole cycle.
+
+SELLs are never ranked or contested for capital (see
+docs/decisions.md), so they execute immediately once collected,
+freeing cash the same cycle's BUY plan can then use. Contains no
+trading decisions, no indicator math, no risk logic, and no planning
+logic itself -- only calls the components that do, in the right order.
+
+MarketDataProvider -> Rule Evaluator -> [SELL: Risk Manager -> Broker]
+                                      -> Opportunity Engine -> [BUY: Risk Manager -> Broker]
+                                      -> Persistence
 """
 
 from datetime import datetime, timedelta, timezone
@@ -11,16 +21,21 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 
 from app.models.strategy import Strategy, StrategyVersion
-from app.schemas.strategy import PortfolioRules, StrategyConfig
+from app.schemas.strategy import AssetRule, PortfolioRules, StrategyConfig
 from app.services import trading_cycle_service
+from app.trading_engine.capital_allocation import resolve_requested_capital
+from app.trading_engine.domain.market_bar import MarketBar
 from app.trading_engine.domain.order import OrderSide, OrderType
-from app.trading_engine.domain.signal import SignalAction
+from app.trading_engine.domain.portfolio import Portfolio
+from app.trading_engine.domain.signal import Signal, SignalAction
 from app.trading_engine.domain.timeframe import Timeframe
 from app.trading_engine.execution.broker import Broker
 from app.trading_engine.market_data.provider import MarketDataProvider
+from app.trading_engine.opportunity.planner import build_execution_plan
+from app.trading_engine.opportunity.types import ExecutionPlanEntry, Opportunity, PlanOutcome
 from app.trading_engine.risk.risk_limits import RiskLimits
-from app.trading_engine.risk.risk_manager import evaluate_risk
 from app.trading_engine.rules.evaluator import evaluate_exit, evaluate_strategy
+from app.trading_engine.risk.risk_manager import RiskDecision, evaluate_risk
 
 # V1 constraint (see docs/decisions.md): strategies operate only on
 # daily bars. This constant is the single place that assumption lives.
@@ -61,53 +76,181 @@ def run_evaluation_cycle(
     config = StrategyConfig.model_validate(strategy_version.config_json)
     risk_limits = build_risk_limits(config.portfolio_rules)
 
+    portfolio = broker.get_portfolio()
+    bars_by_symbol = _collect_bars(market_data, config.asset_rules, portfolio)
+
+    sell_candidates, buy_candidates = _classify_signals(
+        db, strategy_version_id=strategy_version.id,
+        asset_rules=config.asset_rules, bars_by_symbol=bars_by_symbol, portfolio=portfolio,
+    )
+
+    _execute_sells(
+        db, strategy_version_id=strategy_version.id, sell_candidates=sell_candidates,
+        bars_by_symbol=bars_by_symbol, risk_limits=risk_limits, broker=broker,
+    )
+
+    portfolio = broker.get_portfolio()  # refreshed: SELL proceeds now available
+    opportunities = _build_opportunities(buy_candidates, bars_by_symbol, portfolio)
+    plan = build_execution_plan(opportunities, portfolio, bars_by_symbol, risk_limits)
+
+    _execute_plan(
+        db, strategy_version_id=strategy_version.id, plan_entries=plan.entries,
+        bars_by_symbol=bars_by_symbol, risk_limits=risk_limits, broker=broker,
+    )
+
+    final_portfolio = broker.get_portfolio()
+    trading_cycle_service.record_portfolio_snapshot(
+        db, strategy_id=strategy.id, portfolio=final_portfolio
+    )
+
+
+def _collect_bars(
+    market_data: MarketDataProvider, asset_rules: list[AssetRule], portfolio: Portfolio
+) -> dict[str, list[MarketBar]]:
+    """Fetched once per cycle for the union of every asset_rule's
+    symbol (needed for SELL or BUY evaluation) and every currently
+    held symbol (needed for the planner's correlation calc, even if a
+    held position has no asset_rule of its own -- e.g. a manually
+    opened leftover position)."""
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=LOOKBACK_DAYS)
-
-    for rule in config.asset_rules:
-        _evaluate_one_asset(
-            db, strategy=strategy, strategy_version=strategy_version, rule=rule,
-            market_data=market_data, broker=broker, risk_limits=risk_limits,
-            start=start, end=end,
-        )
+    symbols = {rule.symbol for rule in asset_rules} | set(portfolio.positions)
+    return {
+        symbol: market_data.get_historical_bars(symbol, V1_SUPPORTED_TIMEFRAME, start, end)
+        for symbol in symbols
+    }
 
 
-def _evaluate_one_asset(
-    db: Session, *, strategy: Strategy, strategy_version: StrategyVersion, rule,
-    market_data: MarketDataProvider, broker: Broker, risk_limits: RiskLimits,
-    start: datetime, end: datetime,
+def _classify_signals(
+    db: Session, *, strategy_version_id, asset_rules: list[AssetRule],
+    bars_by_symbol: dict[str, list[MarketBar]], portfolio: Portfolio,
+) -> tuple[list[tuple[AssetRule, Signal]], list[tuple[AssetRule, Signal]]]:
+    """Evaluates every asset_rule's signal without executing anything.
+    HOLD and unevaluated signals are logged immediately here, since
+    neither a SELL execution pass nor the planner ever needs to see
+    them -- there's nothing further to decide. A rule with no bars at
+    all is skipped entirely (no log row), matching prior behavior."""
+    sell_candidates: list[tuple[AssetRule, Signal]] = []
+    buy_candidates: list[tuple[AssetRule, Signal]] = []
+
+    for rule in asset_rules:
+        bars = bars_by_symbol.get(rule.symbol, [])
+        if not bars:
+            continue
+
+        position = portfolio.positions.get(rule.symbol)
+        signal = evaluate_exit(position, bars, rule) if position else evaluate_strategy(bars, rule)
+
+        if signal.action == SignalAction.SELL:
+            sell_candidates.append((rule, signal))
+        elif signal.action == SignalAction.BUY:
+            buy_candidates.append((rule, signal))
+        else:
+            trading_cycle_service.log_decision(
+                db, strategy_version_id=strategy_version_id, latest_bar=bars[-1],
+                signal=signal, risk_decision=None, plan_outcome=None,
+            )
+
+    return sell_candidates, buy_candidates
+
+
+def _execute_sells(
+    db: Session, *, strategy_version_id, sell_candidates: list[tuple[AssetRule, Signal]],
+    bars_by_symbol: dict[str, list[MarketBar]], risk_limits: RiskLimits, broker: Broker,
 ) -> None:
-    bars = market_data.get_historical_bars(rule.symbol, V1_SUPPORTED_TIMEFRAME, start, end)
-    if not bars:
-        return
-
-    portfolio = broker.get_portfolio()
-    existing_position = portfolio.positions.get(rule.symbol)
-
-    if existing_position is not None:
-        signal = evaluate_exit(existing_position, bars, rule)
-    else:
-        signal = evaluate_strategy(bars, rule)
-
-    risk_decision = None
-
-    if signal.action in (SignalAction.BUY, SignalAction.SELL):
+    """SELLs are never ranked or contested for capital, so each one
+    executes immediately, sequentially, against the real broker --
+    there's no reason to wait for planning. plan_outcome is always
+    None: SELLs never reach the Opportunity Engine."""
+    for rule, signal in sell_candidates:
+        bars = bars_by_symbol[rule.symbol]
+        portfolio = broker.get_portfolio()
         risk_decision = evaluate_risk(signal, portfolio, rule, risk_limits, current_price=bars[-1].close)
 
         if risk_decision.approved and risk_decision.quantity:
-            side = OrderSide.BUY if signal.action == SignalAction.BUY else OrderSide.SELL
             domain_order = broker.place_order(
-                symbol=rule.symbol, side=side,
+                symbol=rule.symbol, side=OrderSide.SELL,
                 order_type=OrderType.MARKET, quantity=risk_decision.quantity,
             )
             trading_cycle_service.record_order(
-                db, strategy_version_id=strategy_version.id, domain_order=domain_order
+                db, strategy_version_id=strategy_version_id, domain_order=domain_order
             )
 
-    trading_cycle_service.log_decision(
-        db, strategy_version_id=strategy_version.id, latest_bar=bars[-1],
-        signal=signal, risk_decision=risk_decision,
-    )
+        trading_cycle_service.log_decision(
+            db, strategy_version_id=strategy_version_id, latest_bar=bars[-1],
+            signal=signal, risk_decision=risk_decision, plan_outcome=None,
+        )
 
-    portfolio = broker.get_portfolio()
-    trading_cycle_service.record_portfolio_snapshot(db, strategy_id=strategy.id, portfolio=portfolio)
+
+def _build_opportunities(
+    buy_candidates: list[tuple[AssetRule, Signal]],
+    bars_by_symbol: dict[str, list[MarketBar]],
+    portfolio: Portfolio,
+) -> list[Opportunity]:
+    """requested_capital is resolved against the portfolio's total
+    value as of right now (post-SELL, pre-plan) -- the same
+    resolve_requested_capital the Risk Manager itself uses, so the
+    liquidity check's estimate and the Risk Manager's real math can
+    never define "requested capital" two different ways."""
+    opportunities = []
+    for rule, signal in buy_candidates:
+        bars = bars_by_symbol[rule.symbol]
+        current_price = bars[-1].close
+        requested_capital = resolve_requested_capital(
+            rule.capital_allocation, portfolio.total_value, current_price
+        )
+        opportunities.append(Opportunity(
+            symbol=rule.symbol, rule=rule, signal=signal,
+            current_price=current_price, requested_capital=requested_capital,
+        ))
+    return opportunities
+
+
+def _execute_plan(
+    db: Session, *, strategy_version_id, plan_entries: list[ExecutionPlanEntry],
+    bars_by_symbol: dict[str, list[MarketBar]], risk_limits: RiskLimits, broker: Broker,
+) -> None:
+    """Walks the plan in order_in_plan order (SKIPPED_LIQUIDITY entries
+    have no order_in_plan and are logged first, order among themselves
+    doesn't matter). Every SELECTED entry still gets a fresh, real
+    evaluate_risk call against the real broker state immediately
+    before execution -- the planner's simulation only decided what to
+    *attempt*, reality still gets the final say, same defensive
+    pattern the engine has always used."""
+    ordered = sorted(plan_entries, key=lambda e: e.order_in_plan if e.order_in_plan is not None else 0)
+
+    for entry in ordered:
+        opp = entry.opportunity
+        bars = bars_by_symbol[opp.symbol]
+
+        if entry.outcome != PlanOutcome.SELECTED:
+            # entry.reason is the planner's own explanation (e.g. a
+            # liquidity or capital-competition message) -- carried
+            # through as a synthetic RiskDecision so it's actually
+            # persisted, rather than discarded in favor of a generic
+            # "not evaluated" string. plan_outcome (not whether
+            # risk_decision is None) is what correctly signals this
+            # never reached the real Risk Manager.
+            trading_cycle_service.log_decision(
+                db, strategy_version_id=strategy_version_id, latest_bar=bars[-1],
+                signal=opp.signal, risk_decision=RiskDecision(approved=False, reason=entry.reason),
+                plan_outcome=entry.outcome.value,
+            )
+            continue
+
+        portfolio = broker.get_portfolio()
+        risk_decision = evaluate_risk(opp.signal, portfolio, opp.rule, risk_limits, current_price=opp.current_price)
+
+        if risk_decision.approved and risk_decision.quantity:
+            domain_order = broker.place_order(
+                symbol=opp.symbol, side=OrderSide.BUY,
+                order_type=OrderType.MARKET, quantity=risk_decision.quantity,
+            )
+            trading_cycle_service.record_order(
+                db, strategy_version_id=strategy_version_id, domain_order=domain_order
+            )
+
+        trading_cycle_service.log_decision(
+            db, strategy_version_id=strategy_version_id, latest_bar=bars[-1],
+            signal=opp.signal, risk_decision=risk_decision, plan_outcome=entry.outcome.value,
+        )

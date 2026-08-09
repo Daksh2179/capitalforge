@@ -606,3 +606,170 @@ placeholder only, final branding deferred.
   constraint already deliberately relaxed back in Group 4 for
   in-progress drafts) — not a regression, a cleanup of tests that had
   outlived the design they were written against.
+
+## AssetRule identity (Phase 5)
+
+- **AssetRule gained id/created_at/updated_at.** Reading draft_updater.py
+  before designing the Opportunity Engine's tie-break policy surfaced a
+  real problem: asset_rules list position was never a stable ordering —
+  _apply_asset_fragment moves an edited rule to the end of the list on
+  every single edit (adding a condition, changing allocation, anything),
+  so "list order = creation order" was false the moment a rule was ever
+  touched twice. FIFO by list position would have silently tie-broken by
+  most-recently-edited, not actually-created-first.
+- id/created_at/updated_at all default via Pydantic default_factory
+  (uuid4() / now()), so no existing call site that constructs an
+  AssetRule without them breaks — draft_updater is what actually
+  guarantees the semantic contract (id and created_at survive every
+  edit unchanged; updated_at bumps on every edit), not the schema itself.
+- schema_version bumped 2 -> 3, same precedent as the 1 -> 2 bump: old
+  StrategyVersion rows fail validation on load. No production data at
+  stake, dev-only.
+- Verified isolated to the backend: checked frontend types/strategy.ts,
+  formatStrategy.ts, and AppliedOperationsDiff.tsx before implementing.
+  TypeScript interfaces here are structural (no runtime validator), the
+  frontend never constructs a StrategyConfig client-side (drafts always
+  come from /translate or /confirm responses), and the diff view renders
+  the backend's pre-built description string per operation rather than
+  diffing AssetRule objects field-by-field — so the new fields, and
+  updated_at changing on every edit, are both invisible to existing
+  frontend code. Only a stale `schema_version: 2` TS literal needed
+  fixing, for correctness, not because anything depended on it.
+- Exposed a real, separate bug once identity fields existed:
+  request.config.model_dump() (not mode="json") left UUID objects in
+  the dict handed to SQLAlchemy's JSONB column, which uses stdlib
+  json.dumps internally and can't serialize UUID. Fixed at both call
+  sites (api/strategies.py, api/agent.py) via model_dump(mode="json").
+  This gap existed before AssetRule had any UUID field; it just had
+  nothing to trip on it until now.
+
+## Opportunity Engine (Phase 5)
+
+Extensive research preceded this (systematic portfolio management,
+capital rationing/knapsack theory, risk parity, FIFO/pro-rata order
+allocation, technical-analysis "confirmation" literature, liquidity/
+market-impact practice) before any design was locked. Full reasoning
+trail lives in the conversation history; only the resulting decisions
+and the categories explicitly rejected are recorded here.
+
+- **The engine is a portfolio planner, not a ranking engine.** It never
+  scores an opportunity by predicted quality. Its only legitimate inputs
+  are structural facts: capital/cash-reserve/position-count headroom,
+  liquidity relative to a candidate's own trading volume, and
+  correlation with the portfolio's *existing* holdings. Everything else
+  falls back to a deterministic procedural policy (FIFO by
+  AssetRule.created_at, then id).
+- **Explicitly rejected, and why:** indicator-magnitude ranking (RSI
+  depth, distance-below-threshold, EMA separation) — asserts that "more
+  of X" predicts a better outcome, the same shape of claim as the
+  reward-to-risk idea rejected earlier, regardless of how deterministic
+  the computation is. Volume confirmation and multi-timeframe alignment
+  — both explicitly justified in their own literature by "higher win
+  rate," i.e. still a prediction, just relabeled "confirmation." Kelly
+  criterion — requires an estimated win probability, a direct forecast.
+  Capital-allocation size as a priority signal — conflates a deployment
+  constraint ("may use up to this much") with an opportunity-quality
+  judgment; rejected in favor of not needing it once correlation-based
+  portfolio-impact evaluation was adopted.
+- **Adopted: correlation-weighted-by-position-value against existing
+  holdings.** Passes the test the rejected approaches fail: preferring
+  a less-correlated candidate is a claim about portfolio risk exposure,
+  not about which asset performs better — symmetric regardless of
+  market direction. Weighting by each holding's current market value
+  (not a simple average) reflects that a larger existing position
+  contributes more to concentration than a smaller one; still purely
+  structural, no forecast involved.
+- **Correlation is evaluated incrementally**, against the planner's own
+  evolving simulated portfolio, not just the portfolio's state at the
+  start of the cycle. A static-only comparison collapses to FIFO for
+  every candidate whenever the real portfolio starts empty (nothing to
+  correlate against), which defeats the purpose the moment more than
+  one candidate targets the same sector on a fresh account.
+- **Unknown correlation (insufficient overlapping return history, or
+  nothing held yet) falls back to FIFO**, never to zero — treating an
+  unmeasurable correlation as "zero correlation" would silently bias
+  the outcome. Per-holding: a holding with too little shared history is
+  excluded from the weighted average entirely, with weights renormalized
+  across whatever remains computable, rather than diluting the score
+  with a fabricated data point.
+- **Liquidity/market-impact feasibility (Stage 1a) is the one addition
+  from outside the "confirmation" literature that survived scrutiny** —
+  it's a claim about executability (can this position size be filled
+  without moving the price), not about opportunity quality. Computed
+  from data already fetched (MarketBar.volume, same bars used for
+  signal evaluation) — no new data source. LIQUIDITY_MAX_ADV_FRACTION =
+  0.01, module-level constant, not user-configurable yet. Deliberately
+  permissive (never blocks) when volume history is thin or missing,
+  since this is a safety layer on top of the user's own strategy, not
+  a primary gate.
+- **Stage 0 (circuit breakers, e.g. a drawdown-based halt on new buys)
+  deliberately left entirely unbuilt.** Real portfolio-level drawdown
+  halts are a documented, legitimate practice, but a 2025 Journal of
+  Portfolio Management study found mechanical drawdown rules often fail
+  in a specific, costly way (halting or exiting right before a
+  recovery). Building a half-designed, default-on version of this was
+  explicitly rejected in favor of no Stage 0 at all until it gets its
+  own deliberate design pass, opt-in, with the tradeoff stated plainly.
+- **capital_allocation.py extracted as a shared module** so
+  risk_manager.evaluate_risk and the planner's simulation resolve a
+  CapitalAllocation into a dollar amount via the exact same function —
+  they can never define "requested capital" two different ways.
+  risk_manager itself is otherwise behavior-identical after this
+  extraction; the existing test suite passing unchanged confirmed this.
+- **The planner never reimplements Risk Manager rules.** Capital/
+  position-count/cash-reserve feasibility is delegated to the existing,
+  unchanged evaluate_risk, called against a simulated Portfolio copy
+  during planning and again against the real Portfolio at actual
+  execution time. Risk Manager stays the single source of truth for
+  those rules; the planner only decides when to consult it and against
+  what state.
+- **A real bug this surfaced during implementation:** the planner's
+  simulation initially deducted Opportunity.requested_capital (frozen
+  at collection time) from simulated cash, rather than the amount
+  evaluate_risk actually approved. For percentage_of_portfolio
+  allocations those two numbers diverge as soon as an earlier candidate
+  in the same cycle gets committed (total_value shifts), which silently
+  broke feasibility for later candidates. Fixed by deducting quantity *
+  current_price (the real approved amount) instead —
+  requested_capital is only ever valid for the Stage 1a liquidity
+  check, never for cash bookkeeping.
+- **ExecutionPlan is deliberately not persisted.** DecisionLog, Order,
+  and PortfolioSnapshot already provide the durable audit trail a
+  cycle needs; ExecutionPlan is an intermediate planning artifact with
+  no current consumer for a historical record of whole plans, only for
+  their outcomes. Consistent with the standing rule against persisting
+  intermediate state without a real consumer.
+- **Opportunity carries the real Signal from the Rule Evaluator**, never
+  a reconstructed one. An earlier version of _validate_and_commit built
+  a synthetic Signal internally (empty triggered_rules, rule.created_at
+  as a fake timestamp) — fixed by threading the actual evaluate_strategy
+  output all the way from collection through planning through execution
+  and into the DecisionLog, so the audit trail's rules_triggered_json
+  is never fabricated for a planned or deferred candidate.
+- **DecisionLog gained plan_outcome, a second, independent axis from
+  risk_approved.** plan_outcome answers "did the planner ever give this
+  candidate a real chance" (null for every SELL and every HOLD/
+  unevaluated row, since neither reaches the planner; one of
+  skipped_liquidity/deferred/selected for a BUY row). risk_approved
+  answers "did the real portfolio, at actual execution time, approve
+  it" — independently. A row can be plan_outcome=selected,
+  risk_approved=false: the planner chose it against its simulation, and
+  the real re-check at execution time still said no, because real state
+  had diverged from the simulation. Recording a planner deferral as a
+  risk rejection (or vice versa) would misattribute which component
+  actually made the call.
+- **evaluation_job restructured into distinct phases**: collect every
+  signal -> execute SELLs immediately (never ranked or contested for
+  capital, so no reason to wait) -> refresh the real portfolio -> build
+  Opportunities against post-SELL state -> planner builds the Execution
+  Plan -> execute selected BUYs in order_in_plan order, each with a
+  fresh, real evaluate_risk call immediately before execution. Bars are
+  now fetched once per cycle for the union of every asset_rule's symbol
+  and every currently-held symbol (the latter needed for correlation
+  even when a held position has no asset_rule of its own).
+- **Portfolio snapshot cadence changed from once-per-asset to once-per-
+  cycle.** The old cadence only made sense when evaluation and
+  execution were interleaved per-asset; now that the cycle is the real
+  unit of work, multiple snapshots inside one cycle would reflect
+  implementation order, not portfolio states the user ever meaningfully
+  experienced.

@@ -1,7 +1,3 @@
-"""Agent module: understand, clarify, translate, validate, explain.
-Never executes trades directly — writes to a Strategy only while it's
-in draft state, via the existing strategy_service, unchanged.
-"""
 """Agent implementations. StrategyBuilderAgent is the first; each
 later Agent (TechnicalAnalystAgent, PortfolioAnalystAgent, etc.)
 follows the same shape: wrap an existing domain service unchanged,

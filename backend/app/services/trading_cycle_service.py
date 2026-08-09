@@ -25,10 +25,19 @@ def log_decision(
     latest_bar: MarketBar,
     signal: Signal,
     risk_decision: RiskDecision | None,
+    plan_outcome: str | None = None,
 ) -> DecisionLog:
     """risk_decision is None when the signal never reached the risk
-    manager at all (e.g. HOLD or unevaluated) — this function only
-    records what happened, it doesn't decide when risk gets consulted."""
+    manager at all (e.g. HOLD or unevaluated) -- this function only
+    records what happened, it doesn't decide when risk gets consulted.
+
+    plan_outcome is None for every SELL and every HOLD/unevaluated
+    row (neither ever reaches the Opportunity Engine's planner). For a
+    BUY row, it's one of PlanOutcome's values, passed as a plain
+    string so this persistence-layer function has no import
+    dependency on the opportunity package -- the worker is responsible
+    for translating a PlanOutcome enum into its .value before calling
+    this."""
     log = DecisionLog(
         strategy_version_id=strategy_version_id,
         timestamp=signal.timestamp,
@@ -42,6 +51,7 @@ def log_decision(
         action_taken=signal.action.value,
         risk_approved=risk_decision.approved if risk_decision else False,
         risk_reason=risk_decision.reason if risk_decision else "not evaluated by risk manager",
+        plan_outcome=plan_outcome,
     )
     db.add(log)
     db.commit()

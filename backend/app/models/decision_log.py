@@ -26,6 +26,15 @@ class DecisionLog(Base, IDMixin, CreatedAtMixin):
     risk_approved: Mapped[bool] = mapped_column(nullable=False)
     risk_reason: Mapped[str] = mapped_column(String, nullable=False)
 
+    # Null for every SELL and every HOLD/unevaluated row -- neither
+    # ever reaches the Opportunity Engine's planner. For a BUY row,
+    # one of PlanOutcome's values ("skipped_liquidity", "deferred",
+    # "selected"). Deliberately independent of risk_approved: a
+    # "selected" row can still have risk_approved=False if the real
+    # portfolio at execution time diverged from the planner's
+    # simulation. See app/trading_engine/opportunity/types.py.
+    plan_outcome: Mapped[str | None] = mapped_column(String, nullable=True)
+
     # Filled in asynchronously by the agent module later; decision
     # logging must never block on an LLM call.
     explanation_text: Mapped[str | None] = mapped_column(String, nullable=True)
