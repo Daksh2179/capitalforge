@@ -22,6 +22,7 @@ from app.agent.conversation_memory import ConceptReference, ConversationMemory, 
 from app.agent.pipeline.types import (
     AmbiguityReason,
     AmbiguousEntity,
+    DetailLevel,
     ExtractedGoal,
     GoalExtractionIntent,
     GroundedContext,
@@ -38,10 +39,24 @@ _V1_EVALUATIVE_MARKERS = [
     "recommend", "worth it", "better than", "is it a good", "what do you think",
 ]
 
+_V1_EXPAND_MARKERS = ["why", "explain more", "go deeper", "tell me more", "in more detail", "can you elaborate"]
+
 
 def _is_evaluative(raw_message: str) -> bool:
     lowered = raw_message.lower()
     return any(marker in lowered for marker in _V1_EVALUATIVE_MARKERS)
+
+
+def _detect_detail_level(raw_message: str) -> DetailLevel:
+    """V1 uses explicit depth-request language as the trigger, same
+    discipline as _is_evaluative -- documented starting point, not a
+    permanent design. Checked independently of intent: "tell me more"
+    carries the same meaning whether Goal Extraction happened to
+    classify the turn as CONTINUE or something else."""
+    lowered = raw_message.lower()
+    if any(marker in lowered for marker in _V1_EXPAND_MARKERS):
+        return DetailLevel.EXPANDED
+    return DetailLevel.NORMAL
 
 
 def _infer_implicit_reference(
@@ -177,5 +192,6 @@ def ground(
         unresolved_entities=unresolved,
         confirmed_agents=confirmed_agents,
         continue_with_nothing_active=continue_with_nothing_active,
+        detail_level=_detect_detail_level(raw_message),
         raw_message=raw_message,
     )

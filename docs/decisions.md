@@ -773,3 +773,49 @@ and the categories explicitly rejected are recorded here.
   unit of work, multiple snapshots inside one cycle would reflect
   implementation order, not portfolio states the user ever meaningfully
   experienced.
+
+## ResponseComposer (Phase 7)
+
+- **Priority-ordered composition**: errors/refusals first, then the
+  single most-relevant clarification, then every EXECUTED Agent's
+  facts (collectively the direct answer for a multi-Agent turn, not
+  just one Agent's), then at most one interpretation across the whole
+  turn in NORMAL detail (all of them in EXPANDED), then honest
+  "not implemented" notices last.
+- **Clarification arbitration**: dedup by underlying ambiguity (shared
+  candidates or shared `about` entity), merge into one natural
+  question rather than picking one Agent's wording verbatim, surface
+  the first distinct group in plan order. Deliberately not an
+  invented Agent-priority ranking -- no evidence yet justifies one,
+  and plan order already reflects a real decision (Grounding's
+  inferred relevance), not an arbitrary one.
+- **Progressive disclosure via DetailLevel (IntEnum, not bool)**:
+  V1 has two levels, detected via the same kind of explicit lexical
+  marker check as the RESEARCH/EVALUATE tie-break ("why", "explain
+  more", "go deeper", etc.), independent of intent classification.
+  Deliberately not boolean-shaped in the type itself, so a future
+  third level doesn't require a contract change.
+- **Suggested follow-ups (the original design's tier 6) deliberately
+  NOT implemented.** A mediocre heuristic here is indistinguishable
+  from the unsolicited-steering behavior this project has repeatedly
+  refused to build (see the recommendation-philosophy discussion).
+  No follow-up suggestions until there's real evidence of what's
+  genuinely helpful, not before.
+- **Response shape is a list of typed segments (TextSegment today),
+  not a bare string** -- deliberately leaves room for richer segment
+  types (tables, charts, recommendation cards) later without another
+  contract change. `.text` is a V1 convenience flattening only.
+- **Known, confirmed, deliberately deferred limitation**: thread
+  resolution in memory_update_policy.py resolves the OLDEST open
+  thread, not necessarily the one Composer actually chose to surface
+  this turn. If Composer's dedup/plan-order selection ever picks a
+  different clarification than the oldest-raised one, and the user
+  answers it, the wrong thread could be marked resolved next turn.
+  This predates Composer (memory_update_policy.py already flagged it)
+  but Composer makes it more likely to matter now that more than one
+  clarification can realistically coexist in a turn. Real fix needs
+  Grounding to match a resolution to a specific thread by entity, not
+  "whichever is oldest" -- deferred until that exists, not fixed here.
+- **Not yet wired into ConversationPipeline.** Standalone, fully
+  tested against ConversationExecutionPlan directly, same discipline
+  as every Agent before its own wiring step.

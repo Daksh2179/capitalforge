@@ -291,3 +291,25 @@ exist specifically to make this checkable, not just aspirational.
   it happens to be true (e.g., a private company's status) — report
   what was actually found, not an inferred explanation for why nothing
   was found.
+
+## ResponseComposer
+
+The single place responsible for the conversational personality of
+the system. Agents produce structured facts, interpretations,
+clarifications, recommendations, and explanations -- they never write
+prose meant to sound like a conversation. Composer owns: ordering,
+transitions, wording, brevity, progressive disclosure, deduplication,
+and keeping a multi-Agent turn feel like one coherent conversation
+rather than stitched-together specialist outputs.
+
+Multi-Agent conflict is never resolved by Composer -- if Technical
+Analyst and Risk Advisor point in different directions, both are
+presented as what they are (independent pieces of evidence), never
+forced into agreement. This is deliberate preparation for
+InvestmentAnalystAgent, which is the only place synthesis across
+conflicting evidence is allowed to happen.
+
+Adding a new Agent (FundamentalAnalystAgent, InvestmentAnalystAgent,
+etc.) should require registering a capability, never rewriting
+composition logic -- Composer never special-cases any Agent by name,
+only by ResultKind/CapabilityResult structure.

@@ -11,7 +11,7 @@ from app.agent.conversation_memory import ConversationMemory
 from app.agent.llm_service import LLMService
 from app.agent.pipeline.conversation_pipeline import ConversationPipeline
 from app.agent.pipeline.goal_extractor import GoalExtractor
-from app.agent.pipeline.types import ConversationStepStatus, ExtractedGoal, GoalExtractionIntent
+from app.agent.pipeline.types import ConversationStepStatus, DetailLevel, ExtractedGoal, GoalExtractionIntent
 from app.agent.translation.parsed_intent import IntentBatch, ParsedIntent
 from app.agent.translation.translation_service import TranslationService
 from app.assets.asset_directory import AssetEntry, AssetSearchResult
@@ -162,3 +162,46 @@ def test_technical_analyst_agent_executes_for_real_when_provided():
     assert result.plan.steps[0].status == ConversationStepStatus.EXECUTED
     assert result.plan.steps[0].agent == AgentName.TECHNICAL_ANALYST
     assert "RSI" in result.plan.steps[0].results[0].facts[0]
+    
+def test_pipeline_result_carries_a_composed_response():
+    goal = ExtractedGoal(intent=GoalExtractionIntent.RESEARCH, mentioned_entities=["Nvidia"],
+                          candidate_agents=["market_research"])
+    goal_extractor = GoalExtractor(FakeGoalExtractionLLM(goal))
+    directory = FakeAssetDirectory()
+
+    from app.agent.agents.market_research_agent import MarketResearchAgent
+    from app.trading_engine.domain.market_bar import MarketBar
+    from app.trading_engine.market_data.provider import MarketDataProvider
+    from datetime import datetime, timedelta, timezone
+
+    class FakeRealMarketDataProvider(MarketDataProvider):
+        def get_historical_bars(self, symbol, timeframe, start, end):
+            base = datetime.now(timezone.utc) - timedelta(days=30)
+            return [
+                MarketBar(symbol=symbol, timestamp=base + timedelta(days=i),
+                          open=100.0, high=105.0, low=95.0, close=100.0 + i, volume=100_000.0)
+                for i in range(30)
+            ]
+
+    market_research_agent = MarketResearchAgent(FakeRealMarketDataProvider())
+    translation_service = TranslationService(FakeTranslationLLM(IntentBatch(intents=[])), FakeMarketDataProvider(), directory)
+    strategy_builder = StrategyBuilderAgent(translation_service)
+
+    pipeline = ConversationPipeline(goal_extractor, directory, strategy_builder, market_research_agent=market_research_agent)
+    result = pipeline.handle_turn("what's Nvidia doing", [], None, ConversationMemory(), None, turn=1)
+
+    assert result.response.text != ""
+    assert "NVIDIA" in result.response.text
+
+
+def test_composed_response_reflects_detail_level_from_grounding():
+    goal = ExtractedGoal(intent=GoalExtractionIntent.CONTINUE, mentioned_entities=[])
+    goal_extractor = GoalExtractor(FakeGoalExtractionLLM(goal))
+    directory = FakeAssetDirectory()
+    translation_service = TranslationService(FakeTranslationLLM(IntentBatch(intents=[])), FakeMarketDataProvider(), directory)
+    strategy_builder = StrategyBuilderAgent(translation_service)
+
+    pipeline = ConversationPipeline(goal_extractor, directory, strategy_builder)
+    result = pipeline.handle_turn("explain more", [], None, ConversationMemory(), None, turn=1)
+
+    assert result.context.detail_level == DetailLevel.EXPANDED

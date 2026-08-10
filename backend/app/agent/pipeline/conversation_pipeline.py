@@ -30,6 +30,7 @@ from app.agent.pipeline.types import (
 )
 from app.schemas.strategy import StrategyConfig
 from app.agent.agents.technical_analyst_agent import TechnicalAnalystAgent
+from app.agent.pipeline.response_composer import ComposedResponse, compose
 
 _DISPLAY_NAMES: dict[AgentName, str] = {
     AgentName.STRATEGY_BUILDER: "Strategy Building",
@@ -51,6 +52,7 @@ class PipelineResult:
     plan: ConversationExecutionPlan
     memory: ConversationMemory
     state: ConversationState | None
+    response: ComposedResponse
 
 
 class ConversationPipeline:
@@ -121,5 +123,6 @@ class ConversationPipeline:
 
         final_plan = ConversationExecutionPlan(steps=finalized_steps)
         memory = apply_execution_update(memory, final_plan.executed_results, turn=turn)
+        response = compose(final_plan, context.detail_level)
 
-        return PipelineResult(context=context, plan=final_plan, memory=memory, state=new_state)
+        return PipelineResult(context=context, plan=final_plan, memory=memory, state=new_state, response=response)

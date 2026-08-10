@@ -34,6 +34,14 @@ class GoalRelation(str, enum.Enum):
     SUBTASK = "subtask"
     ABANDON_AND_REPLACE = "abandon_and_replace"
 
+class DetailLevel(enum.IntEnum):
+    """IntEnum, not bool -- ordering (>=) is how compose() checks
+    depth, so adding a future level (e.g. FULL = 2) requires no change
+    to any comparison, only a new member. Progressive disclosure, not
+    a binary normal/expanded switch that would need redesigning later."""
+
+    NORMAL = 0
+    EXPANDED = 1
 
 class ExtractedGoal(BaseModel):
     """Goal Extraction's entire output. Deliberately thin -- a
@@ -99,6 +107,7 @@ class GroundedContext(BaseModel):
     unresolved_entities: list[UnresolvedEntity] = []
     confirmed_agents: list[AgentName] = []
     continue_with_nothing_active: bool = False
+    detail_level: DetailLevel = DetailLevel.NORMAL
     raw_message: str
 
 

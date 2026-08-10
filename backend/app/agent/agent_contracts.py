@@ -1,9 +1,7 @@
 """The universal Agent contract types: CapabilityResult (what every
 Agent returns, regardless of domain), Recommendation, and Conclusion.
 No Agent implementations live here -- StrategyBuilderAgent is the
-first one, built as its own step. This module exists so
-memory_update_policy.py has something concrete to consume before any
-real Agent exists.
+first one, built as its own step.
 
 See docs/conversation_principles.md for the philosophy this encodes,
 in particular: draft_change and recommendation are mutually exclusive
@@ -33,11 +31,6 @@ class AgentName(str, enum.Enum):
 
 
 class Conclusion(str, enum.Enum):
-    """WAIT is the default safe outcome -- not trading is always a
-    valid decision throughout CapitalForge. INCONCLUSIVE is a
-    legitimate answer when specialists' evidence genuinely conflicts,
-    reported honestly rather than forced toward a lean."""
-
     BUY = "buy"
     SELL = "sell"
     HOLD = "hold"
@@ -46,12 +39,24 @@ class Conclusion(str, enum.Enum):
     INCONCLUSIVE = "inconclusive"
 
 
+class ResultKind(str, enum.Enum):
+    """Lets ResponseComposer apply priority ordering (errors/refusals
+    surface first) structurally, without inferring anything from text
+    content. NORMAL covers ordinary facts AND honest limitations
+    ("I don't have data for X") -- a limitation is not a failure, it's
+    correct reporting. Only a genuine system error or a deliberate
+    policy refusal (e.g. a future suitability-advice decline) use the
+    other two values."""
+
+    NORMAL = "normal"
+    REFUSAL = "refusal"
+    ERROR = "error"
+
+
 class Recommendation(BaseModel):
     """Produced only by InvestmentAnalystAgent, only when intent
     ground to EVALUATE. confidence is about evidence quality, never
-    about probability of success -- see the locked sentence in
-    docs/conversation_principles.md, which this docstring restates
-    deliberately rather than just referencing:
+    about probability of success:
 
     Confidence represents the completeness, consistency and quality of
     the available evidence. It must never be interpreted as the
@@ -81,9 +86,7 @@ class ClarificationRequest(BaseModel):
 class CapabilityResult(BaseModel):
     """What every Agent returns, regardless of domain. description is
     required -- every Agent action must be traceable back to a plain-
-    language record of what happened (see docs/conversation_principles.md,
-    "Traceability"), which is what description becomes once it's
-    folded into a ConversationEvent.
+    language record of what happened.
 
     resolves_prior_thread and clarification are how an Agent signals
     memory changes without owning Memory itself -- memory_update_policy
@@ -93,6 +96,7 @@ class CapabilityResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     agent: AgentName
+    kind: ResultKind = ResultKind.NORMAL
     description: str
     reasoning: str | None = None
 

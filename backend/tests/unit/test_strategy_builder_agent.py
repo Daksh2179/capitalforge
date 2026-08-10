@@ -5,7 +5,7 @@ suites exercise the same underlying behavior consistently."""
 
 from datetime import datetime, timedelta, timezone
 
-from app.agent.agent_contracts import AgentName
+from app.agent.agent_contracts import AgentName, ResultKind
 from app.agent.agents.strategy_builder_agent import StrategyBuilderAgent
 from app.agent.llm_service import LLMService
 from app.agent.translation.parsed_intent import IntentBatch, ParsedIntent
@@ -156,6 +156,7 @@ def test_error_maps_to_description_only():
 
     assert raw.status == TranslationStatus.ERROR
     assert len(results) == 1
+    assert results[0].kind == ResultKind.ERROR
     assert results[0].description
     assert results[0].draft_change is None
     assert results[0].clarification is None

@@ -18,7 +18,7 @@ edits into one blob); and disambiguation_candidates had nowhere to go
 in ClarificationRequest until candidates was added to it.
 """
 
-from app.agent.agent_contracts import AgentName, CapabilityResult, ClarificationRequest
+from app.agent.agent_contracts import AgentName, CapabilityResult, ClarificationRequest, ResultKind
 from app.agent.conversation_memory import EntityReference
 from app.agent.conversation_state import ConversationState
 from app.agent.translation.translation_result import TranslationResult, TranslationStatus
@@ -96,4 +96,4 @@ class StrategyBuilderAgent:
 
         # ERROR
         message = result.error_message or "Something went wrong processing that."
-        return [CapabilityResult(agent=self.name, description=message)]
+        return [CapabilityResult(agent=self.name, kind=ResultKind.ERROR, description=message)]
