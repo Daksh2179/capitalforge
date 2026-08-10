@@ -205,3 +205,23 @@ def test_composed_response_reflects_detail_level_from_grounding():
     result = pipeline.handle_turn("explain more", [], None, ConversationMemory(), None, turn=1)
 
     assert result.context.detail_level == DetailLevel.EXPANDED
+    
+def test_educator_agent_executes_for_real_when_provided():
+    from app.agent.agents.educator_agent import EducatorAgent
+
+    goal = ExtractedGoal(intent=GoalExtractionIntent.LEARN, mentioned_entities=["RSI"],
+                          candidate_agents=["educator"])
+    goal_extractor = GoalExtractor(FakeGoalExtractionLLM(goal))
+    directory = FakeAssetDirectory()
+    educator_agent = EducatorAgent()
+    translation_service = TranslationService(FakeTranslationLLM(IntentBatch(intents=[])), FakeMarketDataProvider(), directory)
+    strategy_builder = StrategyBuilderAgent(translation_service)
+
+    pipeline = ConversationPipeline(goal_extractor, directory, strategy_builder, educator_agent=educator_agent)
+    result = pipeline.handle_turn("what does RSI mean?", [], None, ConversationMemory(), None, turn=1)
+
+    assert len(result.plan.steps) == 1
+    assert result.plan.steps[0].status == ConversationStepStatus.EXECUTED
+    assert result.plan.steps[0].agent == AgentName.EDUCATOR
+    assert "Relative Strength Index" in result.response.text
+    assert result.memory.recent_concepts[0].name == "RSI"

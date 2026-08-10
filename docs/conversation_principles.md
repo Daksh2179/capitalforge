@@ -137,6 +137,12 @@ Ten Agents, each owning one domain of reasoning:
 - **Investment Analyst** — the recommendation orchestrator (see
   below). The only Agent whose entire job is synthesizing other
   Agents' structured outputs.
+- **Educator** — canned, hand-reviewed concept explanations (RSI, SMA,
+  EMA, moving averages, technical analysis generally). Deliberately
+  not LLM-generated. Corrects a real gap: this Agent was in the
+  original nine-Agent roster but was silently dropped when
+  Fundamental Analyst was added later, leaving the "ten Agent" count
+  in this document wrong until now -- the roster is actually eleven.
 
 ## The universal Agent contract
 

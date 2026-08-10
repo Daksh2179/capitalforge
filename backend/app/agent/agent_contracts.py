@@ -28,6 +28,7 @@ class AgentName(str, enum.Enum):
     PERFORMANCE_ANALYST = "performance_analyst"
     RISK_ADVISOR = "risk_advisor"
     INVESTMENT_ANALYST = "investment_analyst"
+    EDUCATOR = "educator"
 
 
 class Conclusion(str, enum.Enum):

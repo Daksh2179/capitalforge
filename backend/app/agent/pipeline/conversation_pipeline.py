@@ -1,27 +1,31 @@
 """ConversationPipeline: the orchestrator. Goal Extraction -> Grounding
--> Execution Plan -> execute each planned step -> Memory update.
+-> Execution Plan -> execute each planned step -> Memory update ->
+Response Composer.
 
 Not wired into api/agent.py. Standalone, fully tested infrastructure —
 migrated into the live API only once enough Agents exist that
 switching increases capability rather than decreasing it.
 
-MarketResearchAgent is the first Agent to consume GroundedContext
-directly (StrategyBuilderAgent is a permanent exception, carrying
-legacy ConversationState alongside it) -- every future Agent added
-here follows MarketResearchAgent's simpler pattern: agent.execute(context).
+MarketResearchAgent, TechnicalAnalystAgent, and EducatorAgent all
+consume GroundedContext directly (StrategyBuilderAgent is a permanent
+exception, carrying legacy ConversationState alongside it) -- every
+future Agent added here follows their simpler pattern: agent.execute(context).
 """
 
 from dataclasses import dataclass
 
 from app.agent.agent_contracts import AgentName
+from app.agent.agents.educator_agent import EducatorAgent
 from app.agent.agents.market_research_agent import MarketResearchAgent
 from app.agent.agents.strategy_builder_agent import StrategyBuilderAgent
+from app.agent.agents.technical_analyst_agent import TechnicalAnalystAgent
 from app.agent.conversation_memory import ConversationMemory
 from app.agent.conversation_state import ConversationState
 from app.agent.memory_update_policy import apply_execution_update, apply_goal_update
 from app.agent.pipeline.goal_extractor import GoalExtractor
 from app.agent.pipeline.grounding import ground
 from app.agent.pipeline.planner import build_execution_plan
+from app.agent.pipeline.response_composer import ComposedResponse, compose
 from app.agent.pipeline.types import (
     ConversationExecutionPlan,
     ConversationExecutionStep,
@@ -29,8 +33,6 @@ from app.agent.pipeline.types import (
     GroundedContext,
 )
 from app.schemas.strategy import StrategyConfig
-from app.agent.agents.technical_analyst_agent import TechnicalAnalystAgent
-from app.agent.pipeline.response_composer import ComposedResponse, compose
 
 _DISPLAY_NAMES: dict[AgentName, str] = {
     AgentName.STRATEGY_BUILDER: "Strategy Building",
@@ -43,6 +45,7 @@ _DISPLAY_NAMES: dict[AgentName, str] = {
     AgentName.PERFORMANCE_ANALYST: "Performance Analysis",
     AgentName.RISK_ADVISOR: "Risk Advisory",
     AgentName.INVESTMENT_ANALYST: "Investment Analysis",
+    AgentName.EDUCATOR: "Educational Explanation",
 }
 
 
@@ -63,12 +66,14 @@ class ConversationPipeline:
         strategy_builder_agent: StrategyBuilderAgent,
         market_research_agent: MarketResearchAgent | None = None,
         technical_analyst_agent: TechnicalAnalystAgent | None = None,
+        educator_agent: EducatorAgent | None = None,
     ) -> None:
         self._goal_extractor = goal_extractor
         self._asset_directory = asset_directory
         self._strategy_builder_agent = strategy_builder_agent
         self._market_research_agent = market_research_agent
         self._technical_analyst_agent = technical_analyst_agent
+        self._educator_agent = educator_agent
 
     def handle_turn(
         self,
@@ -108,6 +113,11 @@ class ConversationPipeline:
                 ))
             elif planned_step.agent == AgentName.TECHNICAL_ANALYST and self._technical_analyst_agent is not None:
                 results = self._technical_analyst_agent.execute(context)
+                finalized_steps.append(ConversationExecutionStep(
+                    agent=planned_step.agent, status=ConversationStepStatus.EXECUTED, results=results,
+                ))
+            elif planned_step.agent == AgentName.EDUCATOR and self._educator_agent is not None:
+                results = self._educator_agent.execute(context)
                 finalized_steps.append(ConversationExecutionStep(
                     agent=planned_step.agent, status=ConversationStepStatus.EXECUTED, results=results,
                 ))
