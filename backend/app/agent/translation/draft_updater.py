@@ -38,6 +38,7 @@ class AmbiguousAssetError(Exception):
 class UpdateOutcome:
     config: StrategyConfig
     description: str
+    reasoning: str | None = None
 
 
 def apply_fragment(draft: StrategyConfig | None, fragment: IntentFragment) -> UpdateOutcome:
@@ -97,10 +98,16 @@ def _empty_asset_rule(symbol: str) -> AssetRule:
     )
 
 
-def _get_or_create_asset_rule(draft: StrategyConfig | None, symbol: str) -> tuple[AssetRule, list[AssetRule]]:
+def _get_or_create_asset_rule(draft: StrategyConfig | None, symbol: str) -> tuple[AssetRule, list[AssetRule], bool]:
+    """Third return value: True only when this call actually created
+    a brand-new rule (as opposed to returning an existing one) --
+    the one signal _apply_asset_fragment needs to know whether the
+    capital_allocation default is about to fire."""
     other_rules = [r for r in draft.asset_rules if r.symbol != symbol] if draft else []
     existing = next((r for r in draft.asset_rules if r.symbol == symbol), None) if draft else None
-    return (existing or _empty_asset_rule(symbol)), other_rules
+    if existing is not None:
+        return existing, other_rules, False
+    return _empty_asset_rule(symbol), other_rules, True 
 
 def _merge_condition(existing_rules: list, new_condition) -> list:
     """Replace an existing condition targeting the same
@@ -126,15 +133,22 @@ def _merge_condition(existing_rules: list, new_condition) -> list:
     return updated
 
 def _apply_asset_fragment(draft: StrategyConfig | None, symbol: str, fragment: IntentFragment) -> UpdateOutcome:
-    rule, other_rules = _get_or_create_asset_rule(draft, symbol)
+    rule, other_rules, was_created = _get_or_create_asset_rule(draft, symbol)
     portfolio_rules = draft.portfolio_rules if draft else PortfolioRules()
 
-    # Every branch below bumps updated_at as part of the same
-    # model_copy call. id and created_at are never named in `update=`,
-    # so model_copy carries them over unchanged from `rule` — for a
-    # brand-new rule that's the value _empty_asset_rule just set; for
-    # an edit to an existing rule, it's the rule's original identity
-    # and original creation time, exactly as intended.
+    # A brand-new rule created by anything OTHER than an explicit
+    # capital-allocation fragment silently used the 5% default --
+    # this is a real system decision, not a user-specified value, and
+    # StrategyExplainerAgent needs it recorded to answer honestly.
+    # If a CAPITAL_ALLOCATION fragment happens to be what created the
+    # rule (fragment order within one turn isn't guaranteed), no
+    # default fired at all, so no reasoning is attached.
+    reasoning: str | None = None
+    if was_created and fragment.kind != FragmentKind.CAPITAL_ALLOCATION:
+        reasoning = (
+            f"{symbol} was a new rule this turn, so its capital allocation defaulted to "
+            f"{_DEFAULT_ALLOCATION_PCT}% of the portfolio since none was specified."
+        )   
 
     if fragment.kind == FragmentKind.BUY_CONDITION:
         assert fragment.condition is not None
@@ -180,7 +194,7 @@ def _apply_asset_fragment(draft: StrategyConfig | None, symbol: str, fragment: I
         raise ValueError(f"Unhandled fragment kind in _apply_asset_fragment: {fragment.kind}")
 
     new_config = StrategyConfig(portfolio_rules=portfolio_rules, asset_rules=[*other_rules, rule])
-    return UpdateOutcome(config=new_config, description=description)
+    return UpdateOutcome(config=new_config, description=description, reasoning=reasoning)
 
 
 def _remove_asset(draft: StrategyConfig | None, symbol: str) -> UpdateOutcome:

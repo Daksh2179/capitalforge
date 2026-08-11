@@ -13,7 +13,8 @@ from dataclasses import dataclass, field
 from pydantic import BaseModel, ConfigDict
 
 from app.agent.agent_contracts import AgentName, CapabilityResult
-from app.agent.conversation_memory import ConceptReference,EntityReference
+from app.agent.conversation_memory import ConceptReference, ConversationMemory, EntityReference
+from app.schemas.strategy import StrategyConfig
 
 
 class GoalExtractionIntent(str, enum.Enum):
@@ -132,3 +133,24 @@ class ConversationExecutionPlan:
     @property
     def executed_results(self) -> list[CapabilityResult]:
         return [r for step in self.steps if step.status == ConversationStepStatus.EXECUTED for r in step.results]
+    
+@dataclass(frozen=True)
+class AgentExecutionContext:
+    """The single, stable execution context every Agent other than
+    StrategyBuilderAgent receives (StrategyBuilderAgent is the
+    permanent legacy exception carrying ConversationState + draft
+    directly). Bundles GroundedContext with ConversationMemory so the
+    contract can grow later (preferences, permissions, request
+    metadata, etc.) without repeatedly changing every Agent's
+    execute() signature.
+
+    ConversationMemory here is READ-ONLY from every Agent's
+    perspective -- only memory_update_policy.py writes Memory. No
+    Agent should ever attempt to mutate it, even to "just update one
+    field." ConversationMemory is frozen specifically to make that
+    fail loudly rather than silently succeed.
+    """
+
+    grounded_context: GroundedContext
+    memory: ConversationMemory
+    draft: StrategyConfig | None = None

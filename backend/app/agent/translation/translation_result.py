@@ -21,14 +21,21 @@ class TranslationStatus(str, enum.Enum):
 class AppliedOperation(BaseModel):
     """One human-readable summary of a single change applied to the
     draft, so downstream consumers (frontend, logs) can show what
-    changed without diffing two StrategyConfig objects."""
+    changed without diffing two StrategyConfig objects.
+
+    reasoning is None whenever the user supplied the value directly --
+    never fabricated. Currently the only non-None case is a brand-new
+    rule's capital_allocation defaulting to 5% because none was
+    specified (see draft_updater.py). StrategyExplainerAgent reads
+    this field to answer "why" questions honestly.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     operation: str
     symbol: str | None = None
     description: str
-
+    reasoning: str | None = None
 
 class TranslationResult(BaseModel):
     model_config = ConfigDict(extra="forbid")

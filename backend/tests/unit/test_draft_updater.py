@@ -177,3 +177,28 @@ def test_two_rules_created_in_order_have_distinct_stable_ids():
 
     assert aapl.id != nvda.id
     assert aapl.created_at <= nvda.created_at
+    
+def test_new_rule_created_without_allocation_records_default_reasoning():
+    outcome = apply_fragment(None, _condition_fragment(FragmentKind.BUY_CONDITION, "AAPL"))
+    assert outcome.reasoning is not None
+    assert "defaulted to 5.0%" in outcome.reasoning
+
+
+def test_existing_rule_edit_never_records_default_reasoning():
+    first = apply_fragment(None, _condition_fragment(FragmentKind.BUY_CONDITION, "AAPL"))
+    second = apply_fragment(
+        first.config,
+        IntentFragment(kind=FragmentKind.STOP_LOSS, symbol="AAPL", raw_text="set 5% stop loss", percentage_value=5),
+    )
+    assert second.reasoning is None
+
+
+def test_rule_created_via_explicit_capital_allocation_fragment_records_no_default_reasoning():
+    outcome = apply_fragment(
+        None,
+        IntentFragment(
+            kind=FragmentKind.CAPITAL_ALLOCATION, symbol="AAPL", raw_text="allocate $500 to Apple",
+            capital_allocation=CapitalAllocation(type="fixed_capital", capital_usd=500),
+        ),
+    )
+    assert outcome.reasoning is None

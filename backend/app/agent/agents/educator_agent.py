@@ -13,7 +13,7 @@ progressive disclosure, not just a placeholder for it.
 
 from app.agent.agent_contracts import AgentName, CapabilityResult
 from app.agent.conversation_memory import ConceptReference
-from app.agent.pipeline.types import DetailLevel, GroundedContext
+from app.agent.pipeline.types import AgentExecutionContext, DetailLevel
 
 _EXPLANATIONS: dict[str, dict[str, str]] = {
     "RSI": {
@@ -94,8 +94,10 @@ _EXPLANATIONS: dict[str, dict[str, str]] = {
 class EducatorAgent:
     name = AgentName.EDUCATOR
 
-    def execute(self, context: GroundedContext) -> list[CapabilityResult]:
-        if not context.resolved_concepts:
+    def execute(self, context: AgentExecutionContext) -> list[CapabilityResult]:
+        grounded = context.grounded_context
+
+        if not grounded.resolved_concepts:
             return [CapabilityResult(
                 agent=self.name,
                 description="Nothing to explain -- no concept was identified this turn",
@@ -103,7 +105,7 @@ class EducatorAgent:
             )]
 
         results: list[CapabilityResult] = []
-        for concept in context.resolved_concepts:
+        for concept in grounded.resolved_concepts:
             entry = _EXPLANATIONS.get(concept.name)
             if entry is None:
                 results.append(CapabilityResult(
@@ -112,7 +114,7 @@ class EducatorAgent:
                 ))
                 continue
 
-            tier = "expanded" if context.detail_level >= DetailLevel.EXPANDED else "normal"
+            tier = "expanded" if grounded.detail_level >= DetailLevel.EXPANDED else "normal"
             results.append(CapabilityResult(
                 agent=self.name, description=f"Explained {concept.name}",
                 facts=[entry[tier]],

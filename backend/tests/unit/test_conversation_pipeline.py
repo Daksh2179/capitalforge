@@ -225,3 +225,47 @@ def test_educator_agent_executes_for_real_when_provided():
     assert result.plan.steps[0].agent == AgentName.EDUCATOR
     assert "Relative Strength Index" in result.response.text
     assert result.memory.recent_concepts[0].name == "RSI"
+    
+def test_strategy_editor_routes_to_the_same_strategy_builder_agent():
+    goal = ExtractedGoal(intent=GoalExtractionIntent.EDIT, candidate_agents=["strategy_editor"])
+    batch = IntentBatch(intents=[
+        ParsedIntent(operation="set_stop_loss", intent_type="objective", symbol="AAPL", value=8, raw_text="change stop loss to 8%")
+    ])
+    goal_extractor = GoalExtractor(FakeGoalExtractionLLM(goal))
+    directory = FakeAssetDirectory()
+    translation_service = TranslationService(FakeTranslationLLM(batch), FakeMarketDataProvider(), directory)
+    strategy_builder = StrategyBuilderAgent(translation_service)
+
+    pipeline = ConversationPipeline(goal_extractor, directory, strategy_builder)
+    result = pipeline.handle_turn("change stop loss to 8%", [], None, ConversationMemory(), None, turn=1)
+
+    assert result.plan.steps[0].agent == AgentName.STRATEGY_EDITOR
+    assert result.plan.steps[0].status == ConversationStepStatus.EXECUTED
+
+
+def test_strategy_explainer_agent_executes_for_real_when_provided():
+    from app.agent.agents.strategy_explainer_agent import StrategyExplainerAgent
+    from app.agent.conversation_memory import ConversationEvent, EntityReference
+    from datetime import datetime, timezone
+
+    goal = ExtractedGoal(intent=GoalExtractionIntent.EXPLAIN, mentioned_entities=["Nvidia"],
+                          candidate_agents=["strategy_explainer"])
+    goal_extractor = GoalExtractor(FakeGoalExtractionLLM(goal))
+    directory = FakeAssetDirectory()
+    strategy_explainer = StrategyExplainerAgent()
+    translation_service = TranslationService(FakeTranslationLLM(IntentBatch(intents=[])), FakeMarketDataProvider(), directory)
+    strategy_builder = StrategyBuilderAgent(translation_service)
+
+    memory = ConversationMemory(recent_events=[
+        ConversationEvent(
+            agent="strategy_builder", description="Set NVIDIA buy condition", reasoning=None,
+            related_entities=[EntityReference(kind="symbol", value="NVIDIA", display_name="Nvidia (NVIDIA)")],
+            timestamp=datetime.now(timezone.utc),
+        )
+    ])
+
+    pipeline = ConversationPipeline(goal_extractor, directory, strategy_builder, strategy_explainer_agent=strategy_explainer)
+    result = pipeline.handle_turn("why did you set that?", [], None, memory, None, turn=1)
+
+    assert result.plan.steps[0].status == ConversationStepStatus.EXECUTED
+    assert "you specified that value directly" in result.response.text

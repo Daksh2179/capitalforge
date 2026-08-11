@@ -3,8 +3,9 @@
 from datetime import datetime, timedelta, timezone
 
 from app.agent.agents.technical_analyst_agent import TechnicalAnalystAgent
-from app.agent.conversation_memory import ConceptReference, EntityReference
+from app.agent.conversation_memory import ConceptReference, ConversationMemory, EntityReference
 from app.agent.pipeline.types import (
+    AgentExecutionContext,
     AmbiguityReason,
     AmbiguousEntity,
     GoalExtractionIntent,
@@ -46,8 +47,8 @@ def _context(
     resolved_concepts: list | None = None,
     ambiguous_entities: list | None = None,
     unresolved_entities: list | None = None,
-) -> GroundedContext:
-    return GroundedContext(
+) -> AgentExecutionContext:
+    grounded = GroundedContext(
         intent=intent,
         goal_relation=None,
         goal_summary=None,
@@ -57,6 +58,7 @@ def _context(
         unresolved_entities=unresolved_entities or [],
         raw_message="x",
     )
+    return AgentExecutionContext(grounded_context=grounded, memory=ConversationMemory())
 
 
 def test_explicit_rsi_request_computes_only_rsi():

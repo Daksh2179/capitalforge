@@ -1,23 +1,20 @@
 """Unit tests for EducatorAgent."""
 
 from app.agent.agents.educator_agent import EducatorAgent
-from app.agent.conversation_memory import ConceptReference
-from app.agent.pipeline.types import DetailLevel, GoalExtractionIntent, GroundedContext
+from app.agent.conversation_memory import ConceptReference, ConversationMemory
+from app.agent.pipeline.types import AgentExecutionContext, DetailLevel, GoalExtractionIntent, GroundedContext
 
 
 def _context(
     intent: GoalExtractionIntent = GoalExtractionIntent.LEARN,
     resolved_concepts: list | None = None,
     detail_level: DetailLevel = DetailLevel.NORMAL,
-) -> GroundedContext:
-    return GroundedContext(
-        intent=intent,
-        goal_relation=None,
-        goal_summary=None,
-        resolved_concepts=resolved_concepts or [],
-        detail_level=detail_level,
-        raw_message="x",
+) -> AgentExecutionContext:
+    grounded = GroundedContext(
+        intent=intent, goal_relation=None, goal_summary=None,
+        resolved_concepts=resolved_concepts or [], detail_level=detail_level, raw_message="x",
     )
+    return AgentExecutionContext(grounded_context=grounded, memory=ConversationMemory())
 
 
 def test_known_concept_returns_normal_explanation_by_default():

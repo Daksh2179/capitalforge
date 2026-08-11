@@ -1,13 +1,14 @@
-"""Unit tests for MarketResearchAgent, exercised directly against
-GroundedContext -- not yet wired into ConversationPipeline (that's a
-separate, deliberate step, matching how StrategyBuilderAgent was
-validated standalone before being wired in)."""
+"""Unit tests for MarketResearchAgent, exercised directly against an
+AgentExecutionContext -- not yet wired into ConversationPipeline
+(that's a separate, deliberate step, matching how StrategyBuilderAgent
+was validated standalone before being wired in)."""
 
 from datetime import datetime, timedelta, timezone
 
 from app.agent.agents.market_research_agent import MarketResearchAgent
-from app.agent.conversation_memory import EntityReference
+from app.agent.conversation_memory import ConversationMemory, EntityReference
 from app.agent.pipeline.types import (
+    AgentExecutionContext,
     AmbiguityReason,
     AmbiguousEntity,
     GoalExtractionIntent,
@@ -45,13 +46,12 @@ def _resolved(symbol: str) -> ResolvedEntity:
 
 
 def _context(
-    intent: GoalExtractionIntent = GoalExtractionIntent.RESEARCH,
     resolved_entities: list | None = None,
     ambiguous_entities: list | None = None,
     unresolved_entities: list | None = None,
-) -> GroundedContext:
-    return GroundedContext(
-        intent=intent,
+) -> AgentExecutionContext:
+    grounded = GroundedContext(
+        intent=GoalExtractionIntent.RESEARCH,
         goal_relation=None,
         goal_summary=None,
         resolved_entities=resolved_entities or [],
@@ -59,6 +59,7 @@ def _context(
         unresolved_entities=unresolved_entities or [],
         raw_message="x",
     )
+    return AgentExecutionContext(grounded_context=grounded, memory=ConversationMemory())
 
 
 def test_reports_price_and_52_week_range_for_a_resolved_symbol():

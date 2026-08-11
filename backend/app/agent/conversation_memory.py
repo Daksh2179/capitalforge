@@ -114,7 +114,17 @@ class ConversationGoal(BaseModel):
 
 
 class ConversationMemory(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    """... (existing docstring content stays) ...
+
+    Frozen: read-only from every Agent's perspective (see
+    AgentExecutionContext in pipeline/types.py). Only
+    memory_update_policy.py produces new instances, always via
+    model_copy, never in-place mutation -- frozen=True makes any
+    accidental direct field assignment fail loudly instead of quietly
+    succeeding and breaking the one write-path rule this architecture
+    depends on."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     active_goal: ConversationGoal | None = None
     primary_focus: EntityReference | None = None

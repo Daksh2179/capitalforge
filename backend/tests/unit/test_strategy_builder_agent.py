@@ -73,7 +73,10 @@ def test_single_operation_maps_to_one_capability_result():
     assert results[0].agent == AgentName.STRATEGY_BUILDER
     assert results[0].draft_change is not None
     assert results[0].draft_change.symbol == "AAPL"
-    assert results[0].reasoning is None
+    # This is a brand-new rule created without an explicit allocation
+    # fragment -- the capital-allocation default correctly fires and
+    # is recorded, per test_default_allocation_reasoning_flows_through_to_capability_result.
+    assert results[0].reasoning is not None
     assert results[0].affected_entities[0].value == "AAPL"
     assert state.focused_symbol == "AAPL"
 
@@ -160,3 +163,16 @@ def test_error_maps_to_description_only():
     assert results[0].description
     assert results[0].draft_change is None
     assert results[0].clarification is None
+    
+def test_default_allocation_reasoning_flows_through_to_capability_result():
+    batch = IntentBatch(intents=[
+        ParsedIntent(
+            operation="set_buy_condition", intent_type="objective", symbol="AAPL",
+            indicator="PRICE", period=1, operator="less_than", value=180,
+            raw_text="Buy Apple below $180",
+        )
+    ])
+    results, _, _ = _agent(FakeLLMService(batch)).execute("Buy Apple below $180", [], None, None)
+
+    assert results[0].reasoning is not None
+    assert "defaulted to 5.0%" in results[0].reasoning

@@ -60,8 +60,9 @@ class StrategyBuilderAgent:
                 CapabilityResult(
                     agent=self.name,
                     description=op.description,
-                    reasoning=None,  # draft_updater records WHAT changed, never WHY --
-                                      # never fabricated here. Strategy Explainer's job later.
+                    reasoning=op.reasoning,  # None unless draft_updater actually recorded a
+                                               # real system decision (currently: the capital-
+                                               # allocation default) -- never fabricated here.
                     draft_change=op,
                     affected_entities=(
                         [EntityReference(kind="symbol", value=op.symbol, display_name=op.symbol)]
@@ -70,7 +71,7 @@ class StrategyBuilderAgent:
                 )
                 for op in result.applied_operations
             ]
-
+            
         if result.status == TranslationStatus.NEEDS_CLARIFICATION:
             message = result.clarification_message or "Could you clarify that?"
             return [CapabilityResult(

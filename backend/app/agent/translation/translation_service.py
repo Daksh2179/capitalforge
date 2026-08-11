@@ -112,7 +112,8 @@ class TranslationService:
 
             current_draft = outcome.config
             applied.append(AppliedOperation(
-                operation=fragment.kind.value, symbol=fragment.symbol, description=outcome.description
+                operation=fragment.kind.value, symbol=fragment.symbol,
+                description=outcome.description, reasoning=outcome.reasoning,
             ))
 
             new_state.pending_clarification = None

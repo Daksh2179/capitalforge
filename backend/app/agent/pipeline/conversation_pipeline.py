@@ -2,14 +2,20 @@
 -> Execution Plan -> execute each planned step -> Memory update ->
 Response Composer.
 
-Not wired into api/agent.py. Standalone, fully tested infrastructure —
-migrated into the live API only once enough Agents exist that
-switching increases capability rather than decreasing it.
+Not wired into api/agent.py. Standalone, fully tested infrastructure.
 
-MarketResearchAgent, TechnicalAnalystAgent, and EducatorAgent all
-consume GroundedContext directly (StrategyBuilderAgent is a permanent
-exception, carrying legacy ConversationState alongside it) -- every
-future Agent added here follows their simpler pattern: agent.execute(context).
+STRATEGY_BUILDER and STRATEGY_EDITOR both route to the same
+StrategyBuilderAgent instance -- draft_updater already handles create
+and edit identically, so a separate "editor" class would just wrap
+the same behavior twice. The two AgentNames are kept distinct because
+they represent a real conversational-intent difference Goal Extraction
+can meaningfully classify, useful for ResponseComposer's wording later,
+even though the underlying execution is one implementation.
+
+MarketResearchAgent, TechnicalAnalystAgent, EducatorAgent, and
+StrategyExplainerAgent all consume a single AgentExecutionContext
+(GroundedContext + read-only ConversationMemory) -- every future
+Agent added here follows that same pattern.
 """
 
 from dataclasses import dataclass
@@ -18,6 +24,7 @@ from app.agent.agent_contracts import AgentName
 from app.agent.agents.educator_agent import EducatorAgent
 from app.agent.agents.market_research_agent import MarketResearchAgent
 from app.agent.agents.strategy_builder_agent import StrategyBuilderAgent
+from app.agent.agents.strategy_explainer_agent import StrategyExplainerAgent
 from app.agent.agents.technical_analyst_agent import TechnicalAnalystAgent
 from app.agent.conversation_memory import ConversationMemory
 from app.agent.conversation_state import ConversationState
@@ -27,6 +34,7 @@ from app.agent.pipeline.grounding import ground
 from app.agent.pipeline.planner import build_execution_plan
 from app.agent.pipeline.response_composer import ComposedResponse, compose
 from app.agent.pipeline.types import (
+    AgentExecutionContext,
     ConversationExecutionPlan,
     ConversationExecutionStep,
     ConversationStepStatus,
@@ -67,6 +75,7 @@ class ConversationPipeline:
         market_research_agent: MarketResearchAgent | None = None,
         technical_analyst_agent: TechnicalAnalystAgent | None = None,
         educator_agent: EducatorAgent | None = None,
+        strategy_explainer_agent: StrategyExplainerAgent | None = None,
     ) -> None:
         self._goal_extractor = goal_extractor
         self._asset_directory = asset_directory
@@ -74,6 +83,7 @@ class ConversationPipeline:
         self._market_research_agent = market_research_agent
         self._technical_analyst_agent = technical_analyst_agent
         self._educator_agent = educator_agent
+        self._strategy_explainer_agent = strategy_explainer_agent
 
     def handle_turn(
         self,
@@ -94,12 +104,14 @@ class ConversationPipeline:
             turn=turn,
         )
 
+        exec_context = AgentExecutionContext(grounded_context=context, memory=memory, draft=draft)
+
         plan = build_execution_plan(context)
         new_state = state
         finalized_steps: list[ConversationExecutionStep] = []
 
         for planned_step in plan.steps:
-            if planned_step.agent == AgentName.STRATEGY_BUILDER:
+            if planned_step.agent in (AgentName.STRATEGY_BUILDER, AgentName.STRATEGY_EDITOR):
                 results, new_state, _raw = self._strategy_builder_agent.execute(
                     user_message, conversation_history, draft, state
                 )
@@ -107,24 +119,26 @@ class ConversationPipeline:
                     agent=planned_step.agent, status=ConversationStepStatus.EXECUTED, results=results,
                 ))
             elif planned_step.agent == AgentName.MARKET_RESEARCH and self._market_research_agent is not None:
-                results = self._market_research_agent.execute(context)
+                results = self._market_research_agent.execute(exec_context)
                 finalized_steps.append(ConversationExecutionStep(
                     agent=planned_step.agent, status=ConversationStepStatus.EXECUTED, results=results,
                 ))
             elif planned_step.agent == AgentName.TECHNICAL_ANALYST and self._technical_analyst_agent is not None:
-                results = self._technical_analyst_agent.execute(context)
+                results = self._technical_analyst_agent.execute(exec_context)
                 finalized_steps.append(ConversationExecutionStep(
                     agent=planned_step.agent, status=ConversationStepStatus.EXECUTED, results=results,
                 ))
             elif planned_step.agent == AgentName.EDUCATOR and self._educator_agent is not None:
-                results = self._educator_agent.execute(context)
+                results = self._educator_agent.execute(exec_context)
+                finalized_steps.append(ConversationExecutionStep(
+                    agent=planned_step.agent, status=ConversationStepStatus.EXECUTED, results=results,
+                ))
+            elif planned_step.agent == AgentName.STRATEGY_EXPLAINER and self._strategy_explainer_agent is not None:
+                results = self._strategy_explainer_agent.execute(exec_context)
                 finalized_steps.append(ConversationExecutionStep(
                     agent=planned_step.agent, status=ConversationStepStatus.EXECUTED, results=results,
                 ))
             else:
-                # Every other Agent doesn't exist yet -- an honest,
-                # explicit "not implemented" beats a wrong answer or a
-                # silent fallback to StrategyBuilder.
                 display = _DISPLAY_NAMES.get(planned_step.agent, planned_step.agent.value)
                 finalized_steps.append(ConversationExecutionStep(
                     agent=planned_step.agent, status=ConversationStepStatus.SKIPPED_NOT_IMPLEMENTED,

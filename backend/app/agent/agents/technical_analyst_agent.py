@@ -1,22 +1,13 @@
 """TechnicalAnalystAgent: wraps get_indicator_readings, which itself
 wraps the existing indicator registry -- never a second computation.
-Same "thin adapter over an existing, trusted service" template as
-MarketResearchAgent.
 
 Reports fact -> conventional interpretation -> explicit limit, in that
-order, per docs/conversation_principles.md, with facts and
-interpretation kept in separate CapabilityResult fields (never merged
-into one sentence) so ResponseComposer can enforce fact-before-
-convention structurally rather than hoping the text happens to be
-ordered right.
+order, with facts and interpretation kept in separate CapabilityResult
+fields.
 
-Two request shapes, deliberately distinguished (see docs/decisions.md):
-an explicit named indicator ("what's NVDA's RSI") computes only that;
-a generic technicals request ("what are the technicals for NVDA", or
-no indicator concept resolved at all) computes the documented V1
-snapshot -- RSI(14), SMA(50), SMA(200). This is a real product
-decision (matching how a trader would expect a "technical snapshot"
-to look), not an implementation detail.
+Two request shapes: an explicit named indicator computes only that;
+a generic technicals request computes the documented V1 snapshot --
+RSI(14), SMA(50), SMA(200).
 
 What this Agent is explicitly not allowed to infer: never predicts a
 future indicator reading or price; never asserts a conventional
@@ -27,7 +18,7 @@ InvestmentAnalystAgent, and only on an EVALUATE-classified turn.
 from app.agent.agent_contracts import AgentName, CapabilityResult, ClarificationRequest
 from app.agent.context.indicator_context import IndicatorReading, get_indicator_readings
 from app.agent.conversation_memory import ConceptReference
-from app.agent.pipeline.types import GroundedContext
+from app.agent.pipeline.types import AgentExecutionContext
 from app.trading_engine.market_data.provider import MarketDataProvider
 
 _SNAPSHOT_REQUESTS: list[tuple[str, int]] = [("RSI", 14), ("SMA", 50), ("SMA", 200)]
@@ -56,9 +47,11 @@ class TechnicalAnalystAgent:
     def __init__(self, market_data: MarketDataProvider) -> None:
         self._market_data = market_data
 
-    def execute(self, context: GroundedContext) -> list[CapabilityResult]:
-        if context.ambiguous_entities and not context.resolved_entities:
-            candidates = [c for a in context.ambiguous_entities for c in a.candidates]
+    def execute(self, context: AgentExecutionContext) -> list[CapabilityResult]:
+        grounded = context.grounded_context
+
+        if grounded.ambiguous_entities and not grounded.resolved_entities:
+            candidates = [c for a in grounded.ambiguous_entities for c in a.candidates]
             return [CapabilityResult(
                 agent=self.name, description="Asked which asset was meant before computing indicators",
                 clarification=ClarificationRequest(
@@ -66,17 +59,17 @@ class TechnicalAnalystAgent:
                 ),
             )]
 
-        if not context.resolved_entities:
+        if not grounded.resolved_entities:
             return [CapabilityResult(
                 agent=self.name, description="Nothing to analyze -- no asset was identified this turn",
                 facts=["I'm not sure which company you're asking about."],
             )]
 
-        requests = self._build_requests(context)
+        requests = self._build_requests(grounded)
         needs_price_reference = any(name in ("SMA", "EMA") for name, _ in requests)
 
         results: list[CapabilityResult] = []
-        for resolved in context.resolved_entities:
+        for resolved in grounded.resolved_entities:
             symbol = resolved.entity.value
             fetch_requests = [*requests, ("PRICE", 1)] if needs_price_reference else requests
             readings = get_indicator_readings(symbol, self._market_data, fetch_requests)
@@ -107,8 +100,8 @@ class TechnicalAnalystAgent:
             ))
         return results
 
-    def _build_requests(self, context: GroundedContext) -> list[tuple[str, int]]:
-        explicit = [c for c in context.resolved_concepts if c.name in _DEFAULT_PERIODS]
+    def _build_requests(self, grounded) -> list[tuple[str, int]]:
+        explicit = [c for c in grounded.resolved_concepts if c.name in _DEFAULT_PERIODS]
         if explicit:
             return [(c.name, _DEFAULT_PERIODS[c.name]) for c in explicit]
         return _SNAPSHOT_REQUESTS
