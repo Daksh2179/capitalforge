@@ -269,3 +269,37 @@ def test_strategy_explainer_agent_executes_for_real_when_provided():
 
     assert result.plan.steps[0].status == ConversationStepStatus.EXECUTED
     assert "you specified that value directly" in result.response.text
+    
+def test_portfolio_analyst_agent_executes_for_real_when_provided(db_session):
+    from app.agent.agents.portfolio_analyst_agent import PortfolioAnalystAgent
+    from app.models.portfolio_snapshot import PortfolioSnapshot
+    from app.services import strategy_service
+    from datetime import datetime, timezone
+    import uuid as uuid_module
+
+    strategy = strategy_service.create_strategy(
+        db_session, user_id=uuid_module.uuid4(),
+        config_json={"schema_version": 3, "portfolio_rules": {}, "asset_rules": []},
+        source="manual",
+    )
+    db_session.refresh(strategy)
+    db_session.add(PortfolioSnapshot(
+        strategy_id=strategy.id, timestamp=datetime.now(timezone.utc),
+        cash_balance=5000.0, positions_json={}, total_value=5000.0,
+    ))
+    db_session.commit()
+
+    goal = ExtractedGoal(intent=GoalExtractionIntent.REVIEW, candidate_agents=["portfolio_analyst"])
+    goal_extractor = GoalExtractor(FakeGoalExtractionLLM(goal))
+    directory = FakeAssetDirectory()
+    portfolio_analyst = PortfolioAnalystAgent(db_session)
+    translation_service = TranslationService(FakeTranslationLLM(IntentBatch(intents=[])), FakeMarketDataProvider(), directory)
+    strategy_builder = StrategyBuilderAgent(translation_service)
+
+    pipeline = ConversationPipeline(goal_extractor, directory, strategy_builder, portfolio_analyst_agent=portfolio_analyst)
+    result = pipeline.handle_turn(
+        "how's this strategy doing", [], None, ConversationMemory(), None, turn=1, strategy_id=strategy.id,
+    )
+
+    assert result.plan.steps[0].status == ConversationStepStatus.EXECUTED
+    assert "5000.00" in result.response.text

@@ -12,17 +12,26 @@ they represent a real conversational-intent difference Goal Extraction
 can meaningfully classify, useful for ResponseComposer's wording later,
 even though the underlying execution is one implementation.
 
-MarketResearchAgent, TechnicalAnalystAgent, EducatorAgent, and
-StrategyExplainerAgent all consume a single AgentExecutionContext
-(GroundedContext + read-only ConversationMemory) -- every future
-Agent added here follows that same pattern.
+MarketResearchAgent, TechnicalAnalystAgent, EducatorAgent,
+StrategyExplainerAgent, and PortfolioAnalystAgent all consume a single
+AgentExecutionContext (GroundedContext + read-only ConversationMemory
++ draft + strategy_id) -- every future Agent added here follows that
+same pattern.
+
+strategy_id is new: PortfolioAnalystAgent is the first Agent needing
+to know which confirmed strategy a conversation is about, distinct
+from `draft` (the in-progress editing state). Optional and additive --
+every existing caller that doesn't pass it gets None, which correctly
+produces an honest "no active strategy" result rather than a crash.
 """
 
+import uuid
 from dataclasses import dataclass
 
 from app.agent.agent_contracts import AgentName
 from app.agent.agents.educator_agent import EducatorAgent
 from app.agent.agents.market_research_agent import MarketResearchAgent
+from app.agent.agents.portfolio_analyst_agent import PortfolioAnalystAgent
 from app.agent.agents.strategy_builder_agent import StrategyBuilderAgent
 from app.agent.agents.strategy_explainer_agent import StrategyExplainerAgent
 from app.agent.agents.technical_analyst_agent import TechnicalAnalystAgent
@@ -76,6 +85,7 @@ class ConversationPipeline:
         technical_analyst_agent: TechnicalAnalystAgent | None = None,
         educator_agent: EducatorAgent | None = None,
         strategy_explainer_agent: StrategyExplainerAgent | None = None,
+        portfolio_analyst_agent: PortfolioAnalystAgent | None = None,
     ) -> None:
         self._goal_extractor = goal_extractor
         self._asset_directory = asset_directory
@@ -84,6 +94,7 @@ class ConversationPipeline:
         self._technical_analyst_agent = technical_analyst_agent
         self._educator_agent = educator_agent
         self._strategy_explainer_agent = strategy_explainer_agent
+        self._portfolio_analyst_agent = portfolio_analyst_agent
 
     def handle_turn(
         self,
@@ -93,6 +104,7 @@ class ConversationPipeline:
         memory: ConversationMemory,
         state: ConversationState | None,
         turn: int,
+        strategy_id: uuid.UUID | None = None,
     ) -> PipelineResult:
         extracted = self._goal_extractor.extract(user_message, conversation_history, memory)
         context = ground(extracted, user_message, memory, self._asset_directory)
@@ -104,7 +116,9 @@ class ConversationPipeline:
             turn=turn,
         )
 
-        exec_context = AgentExecutionContext(grounded_context=context, memory=memory, draft=draft)
+        exec_context = AgentExecutionContext(
+            grounded_context=context, memory=memory, draft=draft, strategy_id=strategy_id
+        )
 
         plan = build_execution_plan(context)
         new_state = state
@@ -135,6 +149,11 @@ class ConversationPipeline:
                 ))
             elif planned_step.agent == AgentName.STRATEGY_EXPLAINER and self._strategy_explainer_agent is not None:
                 results = self._strategy_explainer_agent.execute(exec_context)
+                finalized_steps.append(ConversationExecutionStep(
+                    agent=planned_step.agent, status=ConversationStepStatus.EXECUTED, results=results,
+                ))
+            elif planned_step.agent == AgentName.PORTFOLIO_ANALYST and self._portfolio_analyst_agent is not None:
+                results = self._portfolio_analyst_agent.execute(exec_context)
                 finalized_steps.append(ConversationExecutionStep(
                     agent=planned_step.agent, status=ConversationStepStatus.EXECUTED, results=results,
                 ))

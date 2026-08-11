@@ -8,6 +8,7 @@ ordering, and partial completion later without another rewrite.
 """
 
 import enum
+import uuid
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel, ConfigDict
@@ -154,3 +155,4 @@ class AgentExecutionContext:
     grounded_context: GroundedContext
     memory: ConversationMemory
     draft: StrategyConfig | None = None
+    strategy_id: uuid.UUID | None = None
