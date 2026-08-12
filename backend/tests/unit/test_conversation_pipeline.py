@@ -303,3 +303,38 @@ def test_portfolio_analyst_agent_executes_for_real_when_provided(db_session):
 
     assert result.plan.steps[0].status == ConversationStepStatus.EXECUTED
     assert "5000.00" in result.response.text
+    
+def test_risk_advisor_agent_executes_for_real_when_provided(db_session):
+    from app.agent.agents.risk_advisor_agent import RiskAdvisorAgent
+    from app.models.portfolio_snapshot import PortfolioSnapshot
+    from app.services import strategy_service
+    from datetime import datetime, timezone
+    import uuid as uuid_module
+
+    strategy = strategy_service.create_strategy(
+        db_session, user_id=uuid_module.uuid4(),
+        config_json={"schema_version": 3, "portfolio_rules": {}, "asset_rules": []},
+        source="manual",
+    )
+    db_session.refresh(strategy)
+    db_session.add(PortfolioSnapshot(
+        strategy_id=strategy.id, timestamp=datetime.now(timezone.utc),
+        cash_balance=3000.0, positions_json={"AAPL": {"quantity": 10, "average_entry_price": 180.0, "current_price": 190.0}},
+        total_value=4900.0,
+    ))
+    db_session.commit()
+
+    goal = ExtractedGoal(intent=GoalExtractionIntent.RESEARCH, candidate_agents=["risk_advisor"])
+    goal_extractor = GoalExtractor(FakeGoalExtractionLLM(goal))
+    directory = FakeAssetDirectory()
+    risk_advisor = RiskAdvisorAgent(db_session, FakeMarketDataProvider())
+    translation_service = TranslationService(FakeTranslationLLM(IntentBatch(intents=[])), FakeMarketDataProvider(), directory)
+    strategy_builder = StrategyBuilderAgent(translation_service)
+
+    pipeline = ConversationPipeline(goal_extractor, directory, strategy_builder, risk_advisor_agent=risk_advisor)
+    result = pipeline.handle_turn(
+        "how risky is my portfolio", [], None, ConversationMemory(), None, turn=1, strategy_id=strategy.id,
+    )
+
+    assert result.plan.steps[0].status == ConversationStepStatus.EXECUTED
+    assert "AAPL" in result.response.text

@@ -50,6 +50,7 @@ from app.agent.pipeline.types import (
     GroundedContext,
 )
 from app.schemas.strategy import StrategyConfig
+from app.agent.agents.risk_advisor_agent import RiskAdvisorAgent
 
 _DISPLAY_NAMES: dict[AgentName, str] = {
     AgentName.STRATEGY_BUILDER: "Strategy Building",
@@ -86,6 +87,7 @@ class ConversationPipeline:
         educator_agent: EducatorAgent | None = None,
         strategy_explainer_agent: StrategyExplainerAgent | None = None,
         portfolio_analyst_agent: PortfolioAnalystAgent | None = None,
+        risk_advisor_agent: RiskAdvisorAgent | None = None,
     ) -> None:
         self._goal_extractor = goal_extractor
         self._asset_directory = asset_directory
@@ -95,6 +97,7 @@ class ConversationPipeline:
         self._educator_agent = educator_agent
         self._strategy_explainer_agent = strategy_explainer_agent
         self._portfolio_analyst_agent = portfolio_analyst_agent
+        self._risk_advisor_agent = risk_advisor_agent
 
     def handle_turn(
         self,
@@ -154,6 +157,11 @@ class ConversationPipeline:
                 ))
             elif planned_step.agent == AgentName.PORTFOLIO_ANALYST and self._portfolio_analyst_agent is not None:
                 results = self._portfolio_analyst_agent.execute(exec_context)
+                finalized_steps.append(ConversationExecutionStep(
+                    agent=planned_step.agent, status=ConversationStepStatus.EXECUTED, results=results,
+                ))
+            elif planned_step.agent == AgentName.RISK_ADVISOR and self._risk_advisor_agent is not None:
+                results = self._risk_advisor_agent.execute(exec_context)
                 finalized_steps.append(ConversationExecutionStep(
                     agent=planned_step.agent, status=ConversationStepStatus.EXECUTED, results=results,
                 ))
