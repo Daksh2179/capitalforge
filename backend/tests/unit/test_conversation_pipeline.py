@@ -364,3 +364,53 @@ def test_fundamental_analyst_agent_executes_for_real_when_provided():
     assert result.plan.steps[0].status == ConversationStepStatus.EXECUTED
     assert result.plan.steps[0].agent == AgentName.FUNDAMENTAL_ANALYST
     assert "45.2" in result.response.text
+    
+def test_investment_analyst_receives_prior_results_and_runs_last():
+    from app.agent.agent_contracts import Conclusion, SynthesizedConclusion
+    from app.agent.agents.investment_analyst_agent import InvestmentAnalystAgent
+    from app.agent.agents.technical_analyst_agent import TechnicalAnalystAgent
+    from app.trading_engine.domain.market_bar import MarketBar
+    from app.trading_engine.market_data.provider import MarketDataProvider
+    from datetime import datetime, timedelta, timezone
+
+    class FakeIndicatorMarketDataProvider(MarketDataProvider):
+        def get_historical_bars(self, symbol, timeframe, start, end):
+            base = datetime.now(timezone.utc) - timedelta(days=250)
+            return [
+                MarketBar(symbol=symbol, timestamp=base + timedelta(days=i),
+                          open=130.0 - i * 0.3, high=130.0, low=125.0, close=130.0 - i * 0.3, volume=100_000.0)
+                for i in range(250)
+            ]
+
+    class FakeSynthesisLLM(LLMService):
+        def generate_structured(self, messages, response_model, schema_name):
+            assert "Technical Analyst" in messages[1]["content"]  # real prior evidence actually reached the prompt
+            return SynthesizedConclusion(
+                conclusion=Conclusion.WATCH, supporting_evidence=["technical picture noted"],
+                assumptions=[], confidence="moderate", invalidating_conditions=[],
+            )
+
+        def generate_text(self, messages):
+            raise NotImplementedError
+
+    goal = ExtractedGoal(
+        intent=GoalExtractionIntent.EVALUATE, mentioned_entities=["Nvidia"],
+        candidate_agents=["investment_analyst", "technical_analyst"],
+    )
+    goal_extractor = GoalExtractor(FakeGoalExtractionLLM(goal))
+    directory = FakeAssetDirectory()
+    technical_analyst = TechnicalAnalystAgent(FakeIndicatorMarketDataProvider())
+    investment_analyst = InvestmentAnalystAgent(FakeSynthesisLLM())
+    translation_service = TranslationService(FakeTranslationLLM(IntentBatch(intents=[])), FakeMarketDataProvider(), directory)
+    strategy_builder = StrategyBuilderAgent(translation_service)
+
+    pipeline = ConversationPipeline(
+        goal_extractor, directory, strategy_builder,
+        technical_analyst_agent=technical_analyst, investment_analyst_agent=investment_analyst,
+    )
+    result = pipeline.handle_turn("should I buy Nvidia?", [], None, ConversationMemory(), None, turn=1)
+
+    agent_order = [step.agent for step in result.plan.steps]
+    assert agent_order[-1] == AgentName.INVESTMENT_ANALYST
+    investment_step = result.plan.steps[-1]
+    assert investment_step.results[0].recommendation is not None

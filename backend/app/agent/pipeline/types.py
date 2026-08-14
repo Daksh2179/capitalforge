@@ -156,3 +156,4 @@ class AgentExecutionContext:
     memory: ConversationMemory
     draft: StrategyConfig | None = None
     strategy_id: uuid.UUID | None = None
+    prior_results: list[CapabilityResult] = field(default_factory=list)

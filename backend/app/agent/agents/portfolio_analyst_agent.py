@@ -5,6 +5,14 @@ read functions; the only "new" logic is a one-line symbol filter,
 since DecisionLog isn't indexed by symbol at the database layer and a
 new query function isn't warranted for a single in-memory filter.
 
+held_position: bool is now set on every per-symbol result -- a real,
+deterministic fact (does the latest PortfolioSnapshot currently show
+this symbol with positive quantity), added specifically because
+InvestmentAnalystAgent's SELL conclusion must never be produced for
+an asset the user doesn't actually hold. This is a hard, code-enforced
+gate downstream, not just informational -- so this field has to be
+trustworthy, not inferred from prose.
+
 V1 scope, deliberately narrow (see docs/decisions.md, "DecisionLog as
 evaluation history"):
 - "Why didn't you buy/sell X" reports the real, persisted reason
@@ -16,16 +24,6 @@ evaluation history"):
 - "How's this strategy doing" reports the most recent PortfolioSnapshot
   (cash, total value, positions) -- NOT performance/returns over time,
   which is PerformanceAnalystAgent's distinct, not-yet-built domain.
-- "This morning" / "yesterday" are not resolved to a precise time
-  window -- there's no TimeReference resolution in Grounding yet. V1
-  answers from the most recent rows regardless of the specific phrase
-  used, rather than pretend to filter by a time it can't actually
-  parse.
-
-Needs a real, per-request database Session -- unlike every prior
-Agent, which only needed AgentExecutionContext. Supplied at
-construction, matching how MarketResearchAgent receives a
-MarketDataProvider.
 """
 
 import uuid
@@ -33,6 +31,7 @@ import uuid
 from sqlalchemy.orm import Session
 
 from app.agent.agent_contracts import AgentName, CapabilityResult
+from app.agent.conversation_memory import EntityReference
 from app.agent.pipeline.types import AgentExecutionContext
 from app.services import strategy_service, trading_cycle_service
 
@@ -62,14 +61,22 @@ class PortfolioAnalystAgent:
             )]
 
         if grounded.resolved_entities:
+            snapshots = trading_cycle_service.list_portfolio_snapshots(
+                self._db, strategy_id=context.strategy_id, limit=1
+            )
+            latest_positions = snapshots[0].positions_json if snapshots else {}
             return [
-                self._explain_symbol(strategy.current_version_id, resolved.entity.value, resolved.entity)
+                self._explain_symbol(strategy.current_version_id, resolved.entity.value, resolved.entity, latest_positions)
                 for resolved in grounded.resolved_entities
             ]
 
         return [self._summarize_strategy(context.strategy_id)]
 
-    def _explain_symbol(self, strategy_version_id: uuid.UUID, symbol: str, entity) -> CapabilityResult:
+    def _explain_symbol(
+        self, strategy_version_id: uuid.UUID, symbol: str, entity: EntityReference, latest_positions: dict
+    ) -> CapabilityResult:
+        held_position = symbol in latest_positions and (latest_positions[symbol].get("quantity", 0) or 0) > 0
+
         logs = trading_cycle_service.list_decision_logs(
             self._db, strategy_version_id=strategy_version_id, limit=_RECENT_LOOKBACK
         )
@@ -79,7 +86,7 @@ class PortfolioAnalystAgent:
             return CapabilityResult(
                 agent=self.name, description=f"No recent evaluation history for {symbol}",
                 facts=[f"I don't have any recent evaluation history for {symbol}."],
-                affected_entities=[entity],
+                affected_entities=[entity], held_position=held_position,
             )
 
         most_recent = symbol_logs[0]  # already ordered newest-first
@@ -99,7 +106,7 @@ class PortfolioAnalystAgent:
 
         return CapabilityResult(
             agent=self.name, description=f"Reported recent evaluation history for {symbol}",
-            facts=[fact], affected_entities=[entity],
+            facts=[fact], affected_entities=[entity], held_position=held_position,
         )
 
     def _summarize_strategy(self, strategy_id: uuid.UUID) -> CapabilityResult:

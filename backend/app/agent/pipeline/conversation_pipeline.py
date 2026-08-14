@@ -5,15 +5,18 @@ Response Composer.
 Not wired into api/agent.py. Standalone, fully tested infrastructure.
 
 STRATEGY_BUILDER and STRATEGY_EDITOR both route to the same
-StrategyBuilderAgent instance -- draft_updater already handles create
-and edit identically, so a separate "editor" class would just wrap
-the same behavior twice.
+StrategyBuilderAgent instance. MarketResearchAgent, TechnicalAnalystAgent,
+EducatorAgent, StrategyExplainerAgent, PortfolioAnalystAgent,
+RiskAdvisorAgent, and FundamentalAnalystAgent all consume a single
+AgentExecutionContext.
 
-MarketResearchAgent, TechnicalAnalystAgent, EducatorAgent,
-StrategyExplainerAgent, PortfolioAnalystAgent, RiskAdvisorAgent, and
-FundamentalAnalystAgent all consume a single AgentExecutionContext
-(GroundedContext + read-only ConversationMemory + draft + strategy_id)
--- every future Agent added here follows that same pattern.
+InvestmentAnalystAgent is the one exception to "every step runs in
+isolation": results are accumulated across the loop as they execute,
+and InvestmentAnalystAgent (scheduled last by planner.py) receives
+everything accumulated so far via a second, extended
+AgentExecutionContext carrying prior_results. This is a targeted,
+narrow fan-in for exactly one Agent's real need, not a general
+dependency framework.
 """
 
 import uuid
@@ -22,6 +25,7 @@ from dataclasses import dataclass
 from app.agent.agent_contracts import AgentName
 from app.agent.agents.educator_agent import EducatorAgent
 from app.agent.agents.fundamental_analyst_agent import FundamentalAnalystAgent
+from app.agent.agents.investment_analyst_agent import InvestmentAnalystAgent
 from app.agent.agents.market_research_agent import MarketResearchAgent
 from app.agent.agents.portfolio_analyst_agent import PortfolioAnalystAgent
 from app.agent.agents.risk_advisor_agent import RiskAdvisorAgent
@@ -37,6 +41,7 @@ from app.agent.pipeline.planner import build_execution_plan
 from app.agent.pipeline.response_composer import ComposedResponse, compose
 from app.agent.pipeline.types import (
     AgentExecutionContext,
+    CapabilityResult,
     ConversationExecutionPlan,
     ConversationExecutionStep,
     ConversationStepStatus,
@@ -81,6 +86,7 @@ class ConversationPipeline:
         portfolio_analyst_agent: PortfolioAnalystAgent | None = None,
         risk_advisor_agent: RiskAdvisorAgent | None = None,
         fundamental_analyst_agent: FundamentalAnalystAgent | None = None,
+        investment_analyst_agent: InvestmentAnalystAgent | None = None,
     ) -> None:
         self._goal_extractor = goal_extractor
         self._asset_directory = asset_directory
@@ -92,6 +98,7 @@ class ConversationPipeline:
         self._portfolio_analyst_agent = portfolio_analyst_agent
         self._risk_advisor_agent = risk_advisor_agent
         self._fundamental_analyst_agent = fundamental_analyst_agent
+        self._investment_analyst_agent = investment_analyst_agent
 
     def handle_turn(
         self,
@@ -120,50 +127,44 @@ class ConversationPipeline:
         plan = build_execution_plan(context)
         new_state = state
         finalized_steps: list[ConversationExecutionStep] = []
+        accumulated_results: list[CapabilityResult] = []
 
         for planned_step in plan.steps:
+            results: list[CapabilityResult] | None = None
+            status = ConversationStepStatus.EXECUTED
+
             if planned_step.agent in (AgentName.STRATEGY_BUILDER, AgentName.STRATEGY_EDITOR):
                 results, new_state, _raw = self._strategy_builder_agent.execute(
                     user_message, conversation_history, draft, state
                 )
-                finalized_steps.append(ConversationExecutionStep(
-                    agent=planned_step.agent, status=ConversationStepStatus.EXECUTED, results=results,
-                ))
             elif planned_step.agent == AgentName.MARKET_RESEARCH and self._market_research_agent is not None:
                 results = self._market_research_agent.execute(exec_context)
-                finalized_steps.append(ConversationExecutionStep(
-                    agent=planned_step.agent, status=ConversationStepStatus.EXECUTED, results=results,
-                ))
             elif planned_step.agent == AgentName.TECHNICAL_ANALYST and self._technical_analyst_agent is not None:
                 results = self._technical_analyst_agent.execute(exec_context)
-                finalized_steps.append(ConversationExecutionStep(
-                    agent=planned_step.agent, status=ConversationStepStatus.EXECUTED, results=results,
-                ))
             elif planned_step.agent == AgentName.EDUCATOR and self._educator_agent is not None:
                 results = self._educator_agent.execute(exec_context)
-                finalized_steps.append(ConversationExecutionStep(
-                    agent=planned_step.agent, status=ConversationStepStatus.EXECUTED, results=results,
-                ))
             elif planned_step.agent == AgentName.STRATEGY_EXPLAINER and self._strategy_explainer_agent is not None:
                 results = self._strategy_explainer_agent.execute(exec_context)
-                finalized_steps.append(ConversationExecutionStep(
-                    agent=planned_step.agent, status=ConversationStepStatus.EXECUTED, results=results,
-                ))
             elif planned_step.agent == AgentName.PORTFOLIO_ANALYST and self._portfolio_analyst_agent is not None:
                 results = self._portfolio_analyst_agent.execute(exec_context)
-                finalized_steps.append(ConversationExecutionStep(
-                    agent=planned_step.agent, status=ConversationStepStatus.EXECUTED, results=results,
-                ))
             elif planned_step.agent == AgentName.RISK_ADVISOR and self._risk_advisor_agent is not None:
                 results = self._risk_advisor_agent.execute(exec_context)
-                finalized_steps.append(ConversationExecutionStep(
-                    agent=planned_step.agent, status=ConversationStepStatus.EXECUTED, results=results,
-                ))
             elif planned_step.agent == AgentName.FUNDAMENTAL_ANALYST and self._fundamental_analyst_agent is not None:
                 results = self._fundamental_analyst_agent.execute(exec_context)
+            elif planned_step.agent == AgentName.INVESTMENT_ANALYST and self._investment_analyst_agent is not None:
+                investment_context = AgentExecutionContext(
+                    grounded_context=context, memory=memory, draft=draft, strategy_id=strategy_id,
+                    prior_results=accumulated_results,
+                )
+                results = self._investment_analyst_agent.execute(investment_context)
+            else:
+                status = ConversationStepStatus.SKIPPED_NOT_IMPLEMENTED
+
+            if status == ConversationStepStatus.EXECUTED and results is not None:
                 finalized_steps.append(ConversationExecutionStep(
-                    agent=planned_step.agent, status=ConversationStepStatus.EXECUTED, results=results,
+                    agent=planned_step.agent, status=status, results=results,
                 ))
+                accumulated_results.extend(results)
             else:
                 display = _DISPLAY_NAMES.get(planned_step.agent, planned_step.agent.value)
                 finalized_steps.append(ConversationExecutionStep(

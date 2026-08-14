@@ -88,6 +88,20 @@ class TechnicalAnalystAgent:
             facts = [f"{symbol}'s {r.indicator}({r.period}) is {r.value:.2f}." for r in display_readings]
             interpretations = [_interpret(r, current_price) for r in display_readings]
 
+            # Only RSI has an established conventional threshold (30/70)
+            # we can point to -- no invented threshold for SMA/EMA
+            # position, so evidence_signal stays None unless RSI ran.
+            rsi_readings = [r for r in display_readings if r.indicator == "RSI"]
+            evidence_signal = None
+            if rsi_readings:
+                rsi_value = rsi_readings[0].value
+                if rsi_value < 30:
+                    evidence_signal = "supportive"
+                elif rsi_value > 70:
+                    evidence_signal = "concerning"
+                else:
+                    evidence_signal = "neutral"
+
             results.append(CapabilityResult(
                 agent=self.name,
                 description=f"Computed {', '.join(r.indicator for r in display_readings)} for {symbol}",
@@ -97,6 +111,7 @@ class TechnicalAnalystAgent:
                 introduced_concepts=[
                     ConceptReference(name=r.indicator, introduced_by=self.name.value) for r in display_readings
                 ],
+                evidence_signal=evidence_signal,
             ))
         return results
 

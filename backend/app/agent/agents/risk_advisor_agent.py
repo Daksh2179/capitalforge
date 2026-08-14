@@ -198,7 +198,20 @@ class RiskAdvisorAgent:
             "your overall concentration -- only how it relates to what you already hold."
         )
 
+        # Sign only -- no invented magnitude threshold. Negative
+        # correlation is unambiguously diversifying; positive is
+        # unambiguously concentrating; the sign itself needs no
+        # justification the way a specific cutoff would.
+        evidence_signal = None
+        if correlation is not None:
+            if correlation < 0:
+                evidence_signal = "supportive"
+            elif correlation > 0:
+                evidence_signal = "concerning"
+            else:
+                evidence_signal = "neutral"
+
         return CapabilityResult(
             agent=self.name, description=f"Assessed correlation and relative volatility for {symbol}",
-            facts=facts, affected_entities=[resolved.entity],
+            facts=facts, affected_entities=[resolved.entity], evidence_signal=evidence_signal,
         )

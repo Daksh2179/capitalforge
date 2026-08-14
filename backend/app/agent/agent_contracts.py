@@ -113,6 +113,8 @@ class CapabilityResult(BaseModel):
 
     clarification: ClarificationRequest | None = None
     resolves_prior_thread: bool = False
+    evidence_signal: str | None = None  # "supportive" | "concerning" | "neutral" | None
+    held_position: bool | None = None
 
     @model_validator(mode="after")
     def _draft_change_and_recommendation_are_mutually_exclusive(self) -> "CapabilityResult":
@@ -122,3 +124,19 @@ class CapabilityResult(BaseModel):
                 "no Agent that renders an opinion may also write to the draft in the same turn."
             )
         return self
+    
+class SynthesizedConclusion(BaseModel):
+    """The only thing InvestmentAnalystAgent's LLM call actually
+    produces -- deliberately narrower than Recommendation itself.
+    kind/subject/contributing_agents are known deterministically and
+    are never trusted from LLM output; SELL is validated and, if
+    unsupported by a confirmed held position, downgraded to WAIT in
+    code, not just requested via prompt."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    conclusion: Conclusion
+    supporting_evidence: list[str]
+    assumptions: list[str]
+    confidence: str
+    invalidating_conditions: list[str]
