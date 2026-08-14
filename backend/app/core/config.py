@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     alpaca_base_url: str = "https://paper-api.alpaca.markets"
     groq_api_key: str
     groq_model: str = "openai/gpt-oss-20b"
+    finnhub_api_key: str | None = None
 
 @lru_cache
 def get_settings() -> Settings:

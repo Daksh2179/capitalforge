@@ -338,3 +338,29 @@ def test_risk_advisor_agent_executes_for_real_when_provided(db_session):
 
     assert result.plan.steps[0].status == ConversationStepStatus.EXECUTED
     assert "AAPL" in result.response.text
+    
+def test_fundamental_analyst_agent_executes_for_real_when_provided():
+    from app.agent.agents.fundamental_analyst_agent import FundamentalAnalystAgent
+
+    class FakeFinnhubClient:
+        def get_profile(self, symbol):
+            return {"name": "NVIDIA Corp", "finnhubIndustry": "Semiconductors", "marketCapitalization": 3200000.0}
+
+        def get_metrics(self, symbol):
+            return {"metric": {"peBasicExclExtraTTM": 45.2, "dividendYieldIndicatedAnnual": 0.03}}
+
+    goal = ExtractedGoal(intent=GoalExtractionIntent.RESEARCH, mentioned_entities=["Nvidia"],
+                          candidate_agents=["fundamental_analyst"])
+    goal_extractor = GoalExtractor(FakeGoalExtractionLLM(goal))
+    directory = FakeAssetDirectory()
+    fundamental_analyst = FundamentalAnalystAgent(FakeFinnhubClient())
+    translation_service = TranslationService(FakeTranslationLLM(IntentBatch(intents=[])), FakeMarketDataProvider(), directory)
+    strategy_builder = StrategyBuilderAgent(translation_service)
+
+    pipeline = ConversationPipeline(goal_extractor, directory, strategy_builder, fundamental_analyst_agent=fundamental_analyst)
+    result = pipeline.handle_turn("what's Nvidia's P/E ratio", [], None, ConversationMemory(), None, turn=1)
+
+    assert len(result.plan.steps) == 1
+    assert result.plan.steps[0].status == ConversationStepStatus.EXECUTED
+    assert result.plan.steps[0].agent == AgentName.FUNDAMENTAL_ANALYST
+    assert "45.2" in result.response.text

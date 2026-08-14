@@ -774,6 +774,28 @@ and the categories explicitly rejected are recorded here.
   implementation order, not portfolio states the user ever meaningfully
   experienced.
 
+## Documentation, testing & stabilization (Phase 6)
+
+- **End-to-end scenario tests for the trading engine** (SELL freeing
+  capital for a same-cycle BUY, FIFO competition between candidates,
+  liquidity skip, correlation preference) — each verified against real
+  persisted DecisionLog/Order/PortfolioSnapshot rows, not just
+  in-memory assertions, closing the gap between the Opportunity
+  Engine's individually-tested pieces and their actual behavior
+  together in one cycle.
+- **Real bug found and fixed by those tests, not invented as an
+  edge case**: evaluation_job._execute_plan passed risk_decision=None
+  for every DEFERRED/SKIPPED_LIQUIDITY plan entry, so
+  trading_cycle_service.log_decision fell back to a generic
+  "not evaluated by risk manager" string — discarding the planner's
+  actual, specific reason (e.g. a liquidity explanation or which
+  competing candidate won the capital). Fixed by wrapping the
+  planner's entry.reason in a synthetic RiskDecision(approved=False,
+  reason=entry.reason) instead of None. plan_outcome (not whether
+  risk_decision is None) is what correctly signals "never reached the
+  real Risk Manager" — the fix doesn't blur that distinction, it just
+  stops discarding information that was already being computed.
+
 ## ResponseComposer (Phase 7)
 
 - **Priority-ordered composition**: errors/refusals first, then the
@@ -819,3 +841,48 @@ and the categories explicitly rejected are recorded here.
 - **Not yet wired into ConversationPipeline.** Standalone, fully
   tested against ConversationExecutionPlan directly, same discipline
   as every Agent before its own wiring step.
+
+## Conversational Intelligence — Agent roster (Phase 7 continued)
+
+- **STRATEGY_BUILDER and STRATEGY_EDITOR route to one StrategyBuilderAgent
+  implementation, not two.** draft_updater already handles create and
+  edit identically (_get_or_create_asset_rule branches on symbol
+  presence, nothing else). A separate StrategyEditorAgent would wrap
+  the same behavior twice. The two AgentNames stay distinct in the
+  roster because Goal Extraction can meaningfully classify the
+  conversational-intent difference (useful for Composer's wording
+  later), even though execution is one shared implementation.
+  Confirmed by a real routing test, not just asserted.
+- **AgentExecutionContext (GroundedContext + ConversationMemory + draft
+  + strategy_id) replaced passing GroundedContext alone to every Agent
+  except StrategyBuilderAgent.** One stable, growable contract instead
+  of repeatedly changing every Agent's signature as new needs
+  (preferences, permissions, request metadata) show up later.
+- **ConversationMemory is now frozen=True.** Enforces "only
+  memory_update_policy.py writes Memory" structurally — any accidental
+  direct field assignment from an Agent now fails loudly instead of
+  silently succeeding. model_copy (memory_update_policy's only write
+  path) is unaffected by frozen=True.
+- **draft_updater/AppliedOperation/CapabilityResult now thread real
+  reasoning** for the one case where the system actually chooses a
+  value on the user's behalf: a brand-new rule's capital_allocation
+  defaulting to 5% when unspecified. Detected via a new was_created
+  flag from _get_or_create_asset_rule; None in every other case
+  (user-specified values are never given a fabricated justification).
+  StrategyExplainerAgent's entire V1 scope depends on this field
+  actually being populated somewhere real, not hypothetically.
+- **PortfolioAnalystAgent and RiskAdvisorAgent both need a real
+  Session and, for RiskAdvisor, a MarketDataProvider** — the first
+  Agents needing live infrastructure beyond AgentExecutionContext
+  alone. Both reuse existing reads (trading_cycle_service's list_*
+  functions, portfolio_impact_score, build_risk_limits) rather than
+  duplicating any of them. RiskAdvisorAgent added one new, small,
+  local statistic (volatility via stdev of the same daily_returns()
+  series already used for correlation) rather than a new shared
+  module — promote to shared infrastructure only once a second real
+  consumer exists, same rule that governed ConceptDirectory.
+- **RiskAdvisorAgent never assumes a hypothetical position size.**
+  Correlation and relative volatility are size-independent facts about
+  a candidate; concentration impact depends on an allocation nobody
+  has specified yet, and the Agent says so honestly rather than
+  guessing one.

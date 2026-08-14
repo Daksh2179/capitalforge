@@ -7,22 +7,13 @@ Not wired into api/agent.py. Standalone, fully tested infrastructure.
 STRATEGY_BUILDER and STRATEGY_EDITOR both route to the same
 StrategyBuilderAgent instance -- draft_updater already handles create
 and edit identically, so a separate "editor" class would just wrap
-the same behavior twice. The two AgentNames are kept distinct because
-they represent a real conversational-intent difference Goal Extraction
-can meaningfully classify, useful for ResponseComposer's wording later,
-even though the underlying execution is one implementation.
+the same behavior twice.
 
 MarketResearchAgent, TechnicalAnalystAgent, EducatorAgent,
-StrategyExplainerAgent, and PortfolioAnalystAgent all consume a single
-AgentExecutionContext (GroundedContext + read-only ConversationMemory
-+ draft + strategy_id) -- every future Agent added here follows that
-same pattern.
-
-strategy_id is new: PortfolioAnalystAgent is the first Agent needing
-to know which confirmed strategy a conversation is about, distinct
-from `draft` (the in-progress editing state). Optional and additive --
-every existing caller that doesn't pass it gets None, which correctly
-produces an honest "no active strategy" result rather than a crash.
+StrategyExplainerAgent, PortfolioAnalystAgent, RiskAdvisorAgent, and
+FundamentalAnalystAgent all consume a single AgentExecutionContext
+(GroundedContext + read-only ConversationMemory + draft + strategy_id)
+-- every future Agent added here follows that same pattern.
 """
 
 import uuid
@@ -30,8 +21,10 @@ from dataclasses import dataclass
 
 from app.agent.agent_contracts import AgentName
 from app.agent.agents.educator_agent import EducatorAgent
+from app.agent.agents.fundamental_analyst_agent import FundamentalAnalystAgent
 from app.agent.agents.market_research_agent import MarketResearchAgent
 from app.agent.agents.portfolio_analyst_agent import PortfolioAnalystAgent
+from app.agent.agents.risk_advisor_agent import RiskAdvisorAgent
 from app.agent.agents.strategy_builder_agent import StrategyBuilderAgent
 from app.agent.agents.strategy_explainer_agent import StrategyExplainerAgent
 from app.agent.agents.technical_analyst_agent import TechnicalAnalystAgent
@@ -50,7 +43,6 @@ from app.agent.pipeline.types import (
     GroundedContext,
 )
 from app.schemas.strategy import StrategyConfig
-from app.agent.agents.risk_advisor_agent import RiskAdvisorAgent
 
 _DISPLAY_NAMES: dict[AgentName, str] = {
     AgentName.STRATEGY_BUILDER: "Strategy Building",
@@ -88,6 +80,7 @@ class ConversationPipeline:
         strategy_explainer_agent: StrategyExplainerAgent | None = None,
         portfolio_analyst_agent: PortfolioAnalystAgent | None = None,
         risk_advisor_agent: RiskAdvisorAgent | None = None,
+        fundamental_analyst_agent: FundamentalAnalystAgent | None = None,
     ) -> None:
         self._goal_extractor = goal_extractor
         self._asset_directory = asset_directory
@@ -98,6 +91,7 @@ class ConversationPipeline:
         self._strategy_explainer_agent = strategy_explainer_agent
         self._portfolio_analyst_agent = portfolio_analyst_agent
         self._risk_advisor_agent = risk_advisor_agent
+        self._fundamental_analyst_agent = fundamental_analyst_agent
 
     def handle_turn(
         self,
@@ -162,6 +156,11 @@ class ConversationPipeline:
                 ))
             elif planned_step.agent == AgentName.RISK_ADVISOR and self._risk_advisor_agent is not None:
                 results = self._risk_advisor_agent.execute(exec_context)
+                finalized_steps.append(ConversationExecutionStep(
+                    agent=planned_step.agent, status=ConversationStepStatus.EXECUTED, results=results,
+                ))
+            elif planned_step.agent == AgentName.FUNDAMENTAL_ANALYST and self._fundamental_analyst_agent is not None:
+                results = self._fundamental_analyst_agent.execute(exec_context)
                 finalized_steps.append(ConversationExecutionStep(
                     agent=planned_step.agent, status=ConversationStepStatus.EXECUTED, results=results,
                 ))
