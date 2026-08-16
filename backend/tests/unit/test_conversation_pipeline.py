@@ -414,3 +414,39 @@ def test_investment_analyst_receives_prior_results_and_runs_last():
     assert agent_order[-1] == AgentName.INVESTMENT_ANALYST
     investment_step = result.plan.steps[-1]
     assert investment_step.results[0].recommendation is not None
+def test_performance_analyst_agent_executes_for_real_when_provided(db_session):
+    from app.agent.agents.performance_analyst_agent import PerformanceAnalystAgent
+    from app.models.portfolio_snapshot import PortfolioSnapshot
+    from app.services import strategy_service
+    from datetime import datetime, timedelta, timezone
+    import uuid as uuid_module
+
+    strategy = strategy_service.create_strategy(
+        db_session, user_id=uuid_module.uuid4(),
+        config_json={"schema_version": 3, "portfolio_rules": {}, "asset_rules": []}, source="manual",
+    )
+    db_session.refresh(strategy)
+    db_session.add(PortfolioSnapshot(
+        strategy_id=strategy.id, timestamp=datetime.now(timezone.utc) - timedelta(days=1),
+        cash_balance=10000.0, positions_json={}, total_value=10000.0,
+    ))
+    db_session.add(PortfolioSnapshot(
+        strategy_id=strategy.id, timestamp=datetime.now(timezone.utc),
+        cash_balance=10500.0, positions_json={}, total_value=10500.0,
+    ))
+    db_session.commit()
+
+    goal = ExtractedGoal(intent=GoalExtractionIntent.REVIEW, candidate_agents=["performance_analyst"])
+    goal_extractor = GoalExtractor(FakeGoalExtractionLLM(goal))
+    directory = FakeAssetDirectory()
+    performance_analyst = PerformanceAnalystAgent(db_session)
+    translation_service = TranslationService(FakeTranslationLLM(IntentBatch(intents=[])), FakeMarketDataProvider(), directory)
+    strategy_builder = StrategyBuilderAgent(translation_service)
+
+    pipeline = ConversationPipeline(goal_extractor, directory, strategy_builder, performance_analyst_agent=performance_analyst)
+    result = pipeline.handle_turn(
+        "how has my strategy performed", [], None, ConversationMemory(), None, turn=1, strategy_id=strategy.id,
+    )
+
+    assert result.plan.steps[0].status == ConversationStepStatus.EXECUTED
+    assert "+5.00%" in result.response.text
