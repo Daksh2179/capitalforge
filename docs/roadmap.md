@@ -157,3 +157,56 @@ identify the full category space before patching individual bugs,
 research how existing systems handle each category, and explicitly
 name which flexibility is safe (spelling/aliases/context) versus which
 would let the model make a judgment call it isn't entitled to make.
+
+## Phase 7: Conversational Intelligence — Agent roster COMPLETE
+
+All eleven Agents (Strategy Builder/Editor sharing one implementation,
+Market Research, Technical Analyst, Educator, Strategy Explainer,
+Portfolio Analyst, Risk Advisor, Fundamental Analyst, Investment
+Analyst, Performance Analyst) are real, tested, and wired into
+ConversationPipeline. ConversationMemory, the full pipeline (Goal
+Extraction -> Grounding -> Execution Plan -> Agent execution -> Memory
+update -> ResponseComposer), and the recommendation-synthesis LLM call
+are all built and working standalone.
+
+**Not yet done, in order:**
+
+1. **Live-wiring into api/agent.py.** Nothing above is reachable
+   through the actual running app yet — /translate still runs only
+   the original TranslationService path. This is the next real step.
+2. **The Conversational Layers gaps that predate this phase and were
+   never actually closed by building the Agent roster** (the roster
+   gave these capabilities a home to live in; it didn't automatically
+   fix them):
+   - Typo tolerance in AssetDirectory — confirmed, real, deliberately
+     deferred (see decisions.md's AssetDirectory investigation).
+   - Layer 2 (pronoun/follow-up resolution) — partially covered by
+     Grounding's implicit-reference fallback (primary_focus,
+     recent_concepts for LEARN-intent turns), but
+     last_modified_field-aware edits ("remove the sell rule") were
+     never specifically built or tested.
+   - Layer 4 (proactive suggestions) — still entirely unbuilt, still
+     blocked on sector data for the portfolio-gap case specifically.
+3. **Everything from the original Phase 6 list that was never
+   frontend work**: capital_allocation genuinely optional (drop the
+   fabricated 5% default) — designed, still not implemented.
+
+## Phase 8: Frontend (Activity page, AI Agent UI, Opportunity Engine visibility)
+
+Unchanged from the original Phase 4/6 scope, still entirely
+frontend-only, backend endpoints already exist for all of it:
+
+- Finish the Activity page (equity curve, positions, orders, decision
+  log).
+- Finish the AI Agent UI (Overview, Chat, Agent Rules, History tabs).
+- Surface plan_outcome / Execution Plan visibility in the History tab
+  — currently invisible: a deferred/skipped BUY produces a
+  DecisionLog row but no Order, so nothing in the UI shows it.
+- Once live-wiring (Phase 7, item 1) lands, the Chat tab's actual
+  behavior changes meaningfully — worth sequencing frontend Chat work
+  after that, not before.
+
+## Phase 9: Polish and deployment
+
+Unchanged — no deployment target, no auth, nothing productionized.
+Explicitly last, once everything above is real.

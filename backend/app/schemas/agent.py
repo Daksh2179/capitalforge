@@ -28,6 +28,7 @@ class TranslateResponse(BaseModel):
     disambiguation_candidates: list[str] = []
     error_message: str | None = None
     information_message: str | None = None
+    agent_response: str = ""
 
 
 class ConfirmRequest(BaseModel):

@@ -2,21 +2,26 @@
 -> Execution Plan -> execute each planned step -> Memory update ->
 Response Composer.
 
-Not wired into api/agent.py. Standalone, fully tested infrastructure.
-
 STRATEGY_BUILDER and STRATEGY_EDITOR both route to the same
 StrategyBuilderAgent instance. MarketResearchAgent, TechnicalAnalystAgent,
 EducatorAgent, StrategyExplainerAgent, PortfolioAnalystAgent,
-RiskAdvisorAgent, and FundamentalAnalystAgent all consume a single
-AgentExecutionContext.
+RiskAdvisorAgent, FundamentalAnalystAgent, and PerformanceAnalystAgent
+all consume a single AgentExecutionContext.
 
 InvestmentAnalystAgent is the one exception to "every step runs in
 isolation": results are accumulated across the loop as they execute,
 and InvestmentAnalystAgent (scheduled last by planner.py) receives
 everything accumulated so far via a second, extended
-AgentExecutionContext carrying prior_results. This is a targeted,
-narrow fan-in for exactly one Agent's real need, not a general
-dependency framework.
+AgentExecutionContext carrying prior_results.
+
+PipelineResult.draft: a real bug, found before this was wired live --
+the STRATEGY_BUILDER/STRATEGY_EDITOR branch previously discarded the
+third element of StrategyBuilderAgent.execute()'s return (the raw
+TranslationResult, which carries the actual updated StrategyConfig),
+keeping only the CapabilityResults and the new ConversationState. A
+caller had no way to get the real updated draft at all. Fixed by
+threading it through explicitly; every other turn type passes the
+input draft through unchanged.
 """
 
 import uuid
@@ -27,6 +32,7 @@ from app.agent.agents.educator_agent import EducatorAgent
 from app.agent.agents.fundamental_analyst_agent import FundamentalAnalystAgent
 from app.agent.agents.investment_analyst_agent import InvestmentAnalystAgent
 from app.agent.agents.market_research_agent import MarketResearchAgent
+from app.agent.agents.performance_analyst_agent import PerformanceAnalystAgent
 from app.agent.agents.portfolio_analyst_agent import PortfolioAnalystAgent
 from app.agent.agents.risk_advisor_agent import RiskAdvisorAgent
 from app.agent.agents.strategy_builder_agent import StrategyBuilderAgent
@@ -48,7 +54,6 @@ from app.agent.pipeline.types import (
     GroundedContext,
 )
 from app.schemas.strategy import StrategyConfig
-from app.agent.agents.performance_analyst_agent import PerformanceAnalystAgent
 
 _DISPLAY_NAMES: dict[AgentName, str] = {
     AgentName.STRATEGY_BUILDER: "Strategy Building",
@@ -71,6 +76,7 @@ class PipelineResult:
     plan: ConversationExecutionPlan
     memory: ConversationMemory
     state: ConversationState | None
+    draft: StrategyConfig | None
     response: ComposedResponse
 
 
@@ -129,6 +135,7 @@ class ConversationPipeline:
 
         plan = build_execution_plan(context)
         new_state = state
+        new_draft = draft
         finalized_steps: list[ConversationExecutionStep] = []
         accumulated_results: list[CapabilityResult] = []
 
@@ -137,9 +144,10 @@ class ConversationPipeline:
             status = ConversationStepStatus.EXECUTED
 
             if planned_step.agent in (AgentName.STRATEGY_BUILDER, AgentName.STRATEGY_EDITOR):
-                results, new_state, _raw = self._strategy_builder_agent.execute(
+                results, new_state, raw_translation_result = self._strategy_builder_agent.execute(
                     user_message, conversation_history, draft, state
                 )
+                new_draft = raw_translation_result.draft
             elif planned_step.agent == AgentName.MARKET_RESEARCH and self._market_research_agent is not None:
                 results = self._market_research_agent.execute(exec_context)
             elif planned_step.agent == AgentName.TECHNICAL_ANALYST and self._technical_analyst_agent is not None:
@@ -170,7 +178,6 @@ class ConversationPipeline:
                     agent=planned_step.agent, status=status, results=results,
                 ))
                 accumulated_results.extend(results)
-            
             else:
                 display = _DISPLAY_NAMES.get(planned_step.agent, planned_step.agent.value)
                 finalized_steps.append(ConversationExecutionStep(
@@ -182,4 +189,6 @@ class ConversationPipeline:
         memory = apply_execution_update(memory, final_plan.executed_results, turn=turn)
         response = compose(final_plan, context.detail_level)
 
-        return PipelineResult(context=context, plan=final_plan, memory=memory, state=new_state, response=response)
+        return PipelineResult(
+            context=context, plan=final_plan, memory=memory, state=new_state, draft=new_draft, response=response,
+        )

@@ -86,6 +86,12 @@ Response Composer
 ▼
 User
 
+**One exception to "every step runs independently":**
+`InvestmentAnalystAgent` is scheduled last by `planner.py` (its one
+real ordering rule) and receives every other Agent's results from the
+same turn via `AgentExecutionContext.prior_results` — a narrow,
+targeted fan-in for exactly this one Agent's real need, not a general
+dependency framework.
 
 **Goal Extraction** understands what the user is trying to accomplish,
 identifies obvious entities (raw text, unresolved), and proposes
@@ -114,7 +120,9 @@ is present, Grounding downgrades to `RESEARCH` — ties always go to
 
 ## The Agent roster
 
-Ten Agents, each owning one domain of reasoning:
+Eleven Agents, each owning one domain of reasoning. All eleven are now
+real, implemented, tested, and wired into ConversationPipeline — none
+are live in api/agent.py yet (see decisions.md and roadmap.md):
 
 - **Strategy Builder** — constructs new rules from user language.
 - **Strategy Editor** — modifies existing rules.
@@ -145,6 +153,92 @@ Ten Agents, each owning one domain of reasoning:
   in this document wrong until now -- the roster is actually eleven.
 
 ## The universal Agent contract
+
+**As actually built, this is simpler than originally designed — worth
+correcting explicitly rather than leaving the old four-method shape
+on record as if it were real.** Every Agent implements exactly one
+method:
+
+execute(context: AgentExecutionContext) -> list[CapabilityResult]
+
+
+There is no separate `can_handle()`, `required_data()`, or
+`clarification_needed()` anywhere in the codebase. What replaced them:
+
+- **Routing** (`can_handle`'s job) is fully owned by Grounding +
+  `planner.py` — an Agent is only ever invoked because
+  `GroundedContext.confirmed_agents` already named it. No Agent
+  re-checks its own eligibility.
+- **Data declaration** (`required_data`'s job) is implicit: each Agent's
+  constructor takes exactly the dependencies it needs (a
+  `MarketDataProvider`, a `Session`, a `FinnhubClient`, an `LLMService`)
+  — a real, visible Python signature rather than a separate declared
+  list a caller would need to interpret.
+- **Clarification** (`clarification_needed`'s job) is handled inline,
+  at the top of `execute()` itself: every Agent checks
+  `grounded.ambiguous_entities`/`resolved_entities` first and returns
+  a `CapabilityResult` carrying a `ClarificationRequest` when needed,
+  rather than a separate pre-flight method a caller has to invoke
+  first.
+- **The return type is `list[CapabilityResult]`, not a single one** —
+  several Agents produce one result per resolved entity (e.g. asking
+  about two symbols in one turn), which a singular return type could
+  never have expressed.
+
+Every Agent's contract still must answer three questions, unchanged
+from the original design:
+
+1. **What data do I require?** Now visible directly in the
+   constructor's parameters, not a separately declared list.
+2. **What deterministic outputs do I produce?**
+3. **What am I explicitly not allowed to infer?** Every Agent refuses
+   future-value prediction. `InvestmentAnalystAgent` additionally
+   refuses personal-suitability judgment (see Boundaries, below).
+
+**`InvestmentAnalystAgent` performs no domain analysis.** It never
+computes indicators, reads raw market data, evaluates portfolio
+metrics, or interprets financial statements directly. It only
+synthesizes structured outputs already produced by specialist Agents
+into a coherent recommendation — via a real, constrained LLM call
+(`SynthesizedConclusion`), not a hand-written decision tree; see
+decisions.md for why a rule-based alternative was ruled out entirely.
+
+**`CapabilityResult` gained three fields beyond the original design**:
+`kind: ResultKind` (`NORMAL`/`REFUSAL`/`ERROR`, lets Composer prioritize
+structurally), `evidence_signal` (`"supportive"`/`"concerning"`/
+`"neutral"`/`None` — only `TechnicalAnalystAgent` and
+`RiskAdvisorAgent` legitimately set this today; see decisions.md for
+exactly why the others don't), and `held_position` (a real,
+deterministic fact from `PortfolioAnalystAgent`, the single hard gate
+that keeps `InvestmentAnalystAgent` from ever recommending SELL on
+something the user doesn't own).
+
+Every Agent, without exception, implements:
+
+can_handle(context: GroundedContext) -> bool
+required_data(context: GroundedContext) -> list[DataRequirement]
+clarification_needed(context, data) -> ClarificationRequest | None
+execute(context, data) -> CapabilityResult
+
+
+And every Agent's contract must answer three questions, not two:
+
+1. **What data do I require?** Declared, never fetched ad hoc — no
+   Agent reaches for global state it didn't declare through
+   `required_data()`.
+2. **What deterministic outputs do I produce?**
+3. **What am I explicitly not allowed to infer?** Every Agent refuses
+   future-value prediction. `InvestmentAnalystAgent` additionally
+   refuses personal-suitability judgment (see Boundaries, below).
+
+**`InvestmentAnalystAgent` performs no domain analysis.** It never
+computes indicators, reads raw market data, evaluates portfolio
+metrics, or interprets financial statements directly. It only
+synthesizes structured outputs already produced by specialist Agents
+into a coherent recommendation. This is not an implementation detail —
+it is part of its contract, enforced the same way Risk Manager doesn't
+calculate indicators and the Opportunity Engine doesn't perform risk
+checks.
 
 Every Agent, without exception, implements:
 

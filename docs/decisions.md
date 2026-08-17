@@ -886,3 +886,112 @@ and the categories explicitly rejected are recorded here.
   a candidate; concentration impact depends on an allocation nobody
   has specified yet, and the Agent says so honestly rather than
   guessing one.
+
+## Conversational Intelligence — remaining Agent roster complete (Phase 7 continued)
+
+All eleven Agents now real, tested, and wired into ConversationPipeline.
+Still not live in api/agent.py.
+
+- **FundamentalAnalystAgent uses Finnhub, not FMP, Alpha Vantage,
+  EODHD, or yfinance.** Real investigation, not a default pick:
+  Alpha Vantage (25 req/day) and EODHD (20 req/day) are too
+  restrictive even for occasional conversational lookups. yfinance is
+  free and needs no key, but it's an unofficial scraper against
+  undocumented Yahoo endpoints with no SLA — confirmed real,
+  documented rate-limiting/IP-blocking issues and breakage whenever
+  Yahoo changes its site, incompatible with this project's "never let
+  a component silently fail" discipline. FMP's free tier (250 req/day)
+  was the original candidate from the Phase 4 handoff, but Finnhub's
+  free tier (~60 req/minute, ~86,400/day theoretical) is orders of
+  magnitude more generous for equivalent fundamentals coverage
+  (P/E, market cap, sector, dividend yield), with no card required.
+  Finnhub's free tier is personal/non-commercial only — a fine fit
+  for this project today, worth revisiting only if that ever changes.
+- **`/stock/profile2` and `/stock/metric` field names were verified
+  against real, independent sources before writing the client** —
+  `name`, `finnhubIndustry`, `marketCapitalization` from profile2;
+  `peBasicExclExtraTTM`, `dividendYieldIndicatedAnnual` nested under
+  a `metric` key from `/stock/metric`. Deliberately no EPS field —
+  no source confirmed its exact key, and a guessed field name would
+  silently return `None` forever rather than error, which is worse
+  than just not having the field at all.
+- **`finnhub_api_key` is optional (`str | None = None`) in Settings**,
+  unlike `alpaca_api_key`/`groq_api_key`. Making it required would
+  crash the entire app on startup for anyone who hasn't gotten a
+  Finnhub key yet, for a capability that's supposed to degrade
+  honestly, not take down everything else.
+- **`FundamentalAnalystAgent` distinguishes "not configured" from
+  "Finnhub has no data for this symbol"** — two different reasons for
+  "I don't have that," reported as two different messages, since one
+  is an operational gap and the other is a genuine per-symbol data
+  limit.
+- **`evidence_signal` exists on `CapabilityResult`, but only two
+  Agents legitimately set it.** `TechnicalAnalystAgent` sets it from
+  RSI specifically (the one indicator with an actual conventional
+  30/70 threshold already in use — no new threshold invented).
+  `RiskAdvisorAgent` sets it from correlation's *sign only* (negative
+  = supportive/diversifying, positive = concerning/concentrating —
+  the sign needs no magnitude threshold to justify it). Deliberately
+  left `None` forever on `MarketResearchAgent` (price/range carry no
+  directional signal), `FundamentalAnalystAgent` (no researched
+  valuation benchmark exists to judge a P/E ratio as "attractive" or
+  "expensive" — inventing one now would be exactly the kind of
+  ungrounded heuristic this project has refused everywhere else), and
+  `PortfolioAnalystAgent` (its evidence is historical/contextual, not
+  a directional judgment about the asset itself).
+- **`held_position: bool | None` added to `CapabilityResult`, set by
+  `PortfolioAnalystAgent` by checking the latest `PortfolioSnapshot`'s
+  `positions_json` for the symbol.** This is the one fact
+  `InvestmentAnalystAgent`'s SELL gate cannot be allowed to get wrong,
+  so it needed to be a real, structural, checked value — not inferred
+  from any Agent's prose.
+- **Pipeline fan-in, deliberately narrow**: `planner.py` gained
+  exactly one ordering rule (if `INVESTMENT_ANALYST` is confirmed,
+  schedule it last), and `AgentExecutionContext` gained
+  `prior_results: list[CapabilityResult]`, populated by
+  `ConversationPipeline` as it accumulates results across the turn's
+  loop. A general Agent-dependency framework was explicitly not
+  built — this is one targeted mechanism for one Agent's real need.
+- **`InvestmentAnalystAgent`'s synthesis is a real, constrained LLM
+  call (`generate_structured` against `SynthesizedConclusion`), not a
+  hand-written decision tree — a decision reached only after trying
+  to make a rule-based version work and concluding it structurally
+  can't.** Any deterministic branch on `evidence_signal` labels is
+  vote-counting with extra steps ("2 supportive beats 1 concerning").
+  Inventing a materiality/severity scale to weigh findings against
+  each other is an ordinal scoring system wearing words instead of
+  numbers — the same anti-pattern already rejected for the Opportunity
+  Engine's ranking, just relabeled. Genuinely weighing which
+  specialist's finding matters more *in this specific combination* is
+  a language-understanding task, the same category `GoalExtractor`
+  already performs — not a fact lookup a rule engine can do honestly.
+  This is the correct application of the standing principle
+  (deterministic code for objective facts; an LLM for genuine
+  judgment), not an exception to it.
+- **`SynthesizedConclusion` is deliberately narrower than
+  `Recommendation` itself.** The LLM only ever produces `conclusion`,
+  `supporting_evidence`, `assumptions`, `confidence`,
+  `invalidating_conditions` — `kind`, `subject`, and
+  `contributing_agents` are computed deterministically in code and
+  never trusted from LLM output, since those are facts the code
+  already knows with certainty.
+- **The SELL ownership gate is enforced in code, unconditionally,
+  after generation — not just requested in the prompt.** If the LLM
+  returns `SELL` and `held_position` isn't confirmed `True`, it's
+  downgraded to `WAIT` before the `Recommendation` is ever returned.
+  The prompt also states the rule as a second layer, but the actual
+  guarantee is the code path, matching how every other hard constraint
+  in this project has been enforced (mutual exclusivity of
+  `draft_change`/`recommendation`, the liquidity/risk checks in the
+  Opportunity Engine) — never relying on an LLM "following
+  instructions" alone for something that must never be wrong.
+- **`PerformanceAnalystAgent` is deliberately distinct from
+  `PortfolioAnalystAgent`'s "how's this strategy doing"** — Portfolio
+  Analyst reports the single latest snapshot (a point); Performance
+  Analyst reports return and max drawdown over the *full* snapshot
+  series (a trend), needing at least two data points. Confirmed real
+  gap, not worked around: `Order` has no linkage between a BUY and the
+  SELL that eventually closes it — there's no round-trip "trade"
+  concept in the schema at all, so win rate and per-trade P&L are
+  genuinely unanswerable today. Stated honestly as a limitation, never
+  approximated.
