@@ -169,11 +169,15 @@ Extraction -> Grounding -> Execution Plan -> Agent execution -> Memory
 update -> ResponseComposer), and the recommendation-synthesis LLM call
 are all built and working standalone.
 
+**Done:**
+
+1. **Live-wiring into api/agent.py — COMPLETE.** `/translate` now runs
+   the full ConversationPipeline, backward-compatible with the
+   existing frontend (see decisions.md for the mapping). All eleven
+   Agents are reachable through the actual running app today.
+
 **Not yet done, in order:**
 
-1. **Live-wiring into api/agent.py.** Nothing above is reachable
-   through the actual running app yet — /translate still runs only
-   the original TranslationService path. This is the next real step.
 2. **The Conversational Layers gaps that predate this phase and were
    never actually closed by building the Agent roster** (the roster
    gave these capabilities a home to live in; it didn't automatically

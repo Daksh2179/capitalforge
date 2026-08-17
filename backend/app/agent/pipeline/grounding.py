@@ -25,6 +25,7 @@ from app.agent.pipeline.types import (
     DetailLevel,
     ExtractedGoal,
     GoalExtractionIntent,
+    GoalRelation,
     GroundedContext,
     ResolvedEntity,
     UnresolvedEntity,
@@ -182,9 +183,11 @@ def ground(
         intent == GoalExtractionIntent.CONTINUE and memory.active_goal is None
     )
 
+    goal_relation = None if extracted.goal_relation == GoalRelation.NONE else extracted.goal_relation
+
     return GroundedContext(
         intent=intent,
-        goal_relation=extracted.goal_relation,
+        goal_relation=goal_relation,
         goal_summary=extracted.goal_summary,
         resolved_entities=resolved,
         resolved_concepts=resolved_concepts,

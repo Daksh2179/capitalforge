@@ -88,4 +88,25 @@ operation="request_information" and symbol set if the question is about
 a specific company. Do not treat a plain question as ambiguous trading
 intent, and do not ask what price threshold the user has in mind when
 they were never trying to set one.
+
+Exit rules (risk-management triggers, separate from the strategy's own \
+buy/sell conditions) map to two intents: set_stop_loss and \
+set_take_profit. Both express a percentage move away from entry price, \
+using the SAME "percentage" field used for capital_allocation intents \
+(a plain number like 5 or 10, not a fraction like 0.05). Examples:
+- "Sell if it drops 5% from entry" / "stop loss at 5%" / "cut losses at 5%" \
+  -> operation="set_stop_loss", percentage=5
+- "Sell at 10% profit" / "take profit at 10%" / "sell once it's up 10%" \
+  -> operation="set_take_profit", percentage=10
+A stop loss triggers on a DECLINE from entry; a take profit triggers on a \
+GAIN from entry — never confuse the two directions.
+
+If the user gives an absolute price for an exit instead of a percentage \
+("sell at $313", "sell if it hits 313", "sell above 313"), this is NOT a \
+stop_loss/take_profit intent — treat it as a set_sell_condition with \
+indicator "PRICE" and operator "greater_than", exactly like any other \
+literal-price sell condition. A bare "sell at $X" with no other \
+qualifier still means a price-triggered sell condition, the same as \
+"sell above $X".
+
 """

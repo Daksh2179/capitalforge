@@ -29,7 +29,7 @@ which path hit it, never an unhandled 500.
 """
 
 import uuid
-
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -73,7 +73,7 @@ from app.trading_engine.market_data.alpaca_market_data import AlpacaMarketData
 from app.trading_engine.market_data.provider import MarketDataProvider
 
 router = APIRouter(prefix="/agent", tags=["agent"])
-
+_logger = logging.getLogger(__name__)
 
 # --- Dependency providers ---
 # Each is its own independently overridable FastAPI dependency
@@ -156,11 +156,22 @@ def _get_active_strategy(db: Session, user_id: uuid.UUID) -> Strategy | None:
 def _load_active_strategy_config(db: Session, user_id: uuid.UUID) -> StrategyConfig | None:
     """A brand-new conversation always inherits the user's existing
     active strategy as its starting draft, since V1 supports exactly
-    one active strategy at a time."""
+    one active strategy at a time.
+
+    A stale strategy predating a schema_version bump (see
+    docs/decisions.md) will fail validation here -- rather than crash
+    the whole request over one bad legacy row, this degrades to
+    "no active strategy to seed from," same as if none existed. The
+    real strategy/version row is untouched; only draft-seeding for
+    this conversation is skipped.
+    """
     active = _get_active_strategy(db, user_id)
     if active is None or active.current_version is None:
         return None
-    return StrategyConfig.model_validate(active.current_version.config_json)
+    try:
+        return StrategyConfig.model_validate(active.current_version.config_json)
+    except Exception:
+        return None
 
 
 def _build_translate_response(result: PipelineResult) -> TranslateResponse:
@@ -237,9 +248,10 @@ def translate(
     try:
         result = pipeline.handle_turn(
             request.message, session.messages, session.draft, session.memory, session.state,
-            turn=next_turn, strategy_id=strategy_id,
+            turn=next_turn, strategy_id=strategy_id, user_id=request.user_id,
         )
     except Exception:
+        _logger.exception("Pipeline failure in /translate")
         # Never an unhandled 500 -- same failure shape TranslationService's
         # own internal try/except already produces on its own errors.
         assistant_content = "Something went wrong processing that."

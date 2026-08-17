@@ -995,3 +995,73 @@ Still not live in api/agent.py.
   concept in the schema at all, so win rate and per-trade P&L are
   genuinely unanswerable today. Stated honestly as a limitation, never
   approximated.
+
+## Live-wiring: ConversationPipeline into api/agent.py (Phase 7 continued)
+
+- **`/agent/translate`'s public contract is unchanged.** Same URL,
+  same request schema; the response schema gains exactly one new,
+  additive field (`agent_response`). Every existing field keeps its
+  exact prior meaning and shape — confirmed by re-running the full
+  pre-existing regression suite unmodified in spirit (same assertions,
+  same scenarios), not just by inspection.
+- **Real bug found by tracing the actual data flow before wiring
+  anything live**: `ConversationPipeline.handle_turn`'s
+  STRATEGY_BUILDER/STRATEGY_EDITOR branch discarded the third element
+  of `StrategyBuilderAgent.execute()`'s return (the raw
+  `TranslationResult`, carrying the real updated `StrategyConfig`) --
+  `PipelineResult` had no field for the resulting draft at all. Fixed
+  by adding `PipelineResult.draft`, populated from the raw result when
+  the builder step ran, passed through unchanged otherwise. Found and
+  fixed before any API code was written, not discovered via a failing
+  test afterward.
+- **Backward compatibility achieved by mapping every non-BUILD/EDIT
+  turn through the pre-existing `information` status bucket** --
+  `TranslationService`'s own `INFORMATION` status and
+  `information_message` field already existed for research-type
+  questions before any of this session's Agent work. Every one of the
+  eleven Agents' output (Technical Analyst's indicators, Portfolio
+  Analyst's history, Risk Advisor's assessment, Investment Analyst's
+  recommendation, Educator's explanations, Performance Analyst's
+  return/drawdown, Fundamental Analyst's data) now reaches the
+  existing, unmodified frontend chat UI through that same field,
+  rendered as ordinary assistant text. Zero frontend changes required
+  to see the new Agents working end to end.
+- **`agent_response` is deliberately the forward-looking field** --
+  always populated with the full `ComposedResponse.text`, regardless
+  of turn type, meant for a future Agent-native frontend to read
+  directly instead of reverse-engineering meaning out of
+  `information_message` once it's carrying many different kinds of
+  content. The current frontend simply ignores it today.
+- **`ConversationSession` widened additively** (`memory:
+  ConversationMemory`, `turn_count: int`) -- same kind of widening it
+  already went through once before (bare message list ->
+  `{messages, draft}`), same JSON serialization mechanism, zero new
+  infrastructure. `ConversationState` is untouched and coexists
+  permanently -- `TranslationService` still depends on it directly,
+  by design, forever.
+- **`strategy_id` is resolved fresh from `user_id` on every single
+  `/translate` call, never cached in the session.** If a strategy is
+  confirmed mid-conversation, the very next message correctly sees it
+  -- verified by a real regression test that confirms a strategy via
+  the normal chat flow, then checks a *fresh* conversation's
+  PortfolioAnalystAgent step sees the just-confirmed strategy rather
+  than "no active strategy."
+- **Dependency-injection restructuring, required by the actual test
+  requirements, not a stylistic preference**: `GoalExtractor`,
+  `AssetDirectory`, and `MarketDataProvider` each became their own
+  independently overridable FastAPI dependency (mirroring
+  `_get_translation_service`'s pre-existing pattern), because the new
+  pipeline's `GoalExtractor` needs its own real LLM call that the
+  pre-existing tests had no way to fake. Without this, every existing
+  regression test would have silently started making a real, live Groq
+  call the moment the route was rewired -- confirmed as a real risk by
+  tracing the dependency graph before writing the route, not
+  discovered by a flaky test afterward.
+- **A pipeline/Goal-Extraction failure is caught at the API boundary
+  and mapped to the same error-shaped response `TranslationService`'s
+  own internal try/except already produces on its failures** -- a
+  transient failure looks and behaves identically regardless of which
+  internal path hit it, never an unhandled 500. Verified with a
+  dedicated regression test that deliberately raises inside a faked
+  `GoalExtractor` and confirms `response.status_code == 200` with a
+  graceful `error` body.

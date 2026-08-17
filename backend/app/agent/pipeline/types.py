@@ -35,6 +35,14 @@ class GoalRelation(str, enum.Enum):
     CONTINUATION = "continuation"
     SUBTASK = "subtask"
     ABANDON_AND_REPLACE = "abandon_and_replace"
+    NONE = "none"  # Groq's structured-output schema validator rejects
+                    # Optional[Enum] (an enum-or-null anyOf has no
+                    # discriminator it accepts). NONE is an explicit
+                    # sentinel instead, translated back to genuine
+                    # Python None in ground() -- every downstream
+                    # consumer (GroundedContext.goal_relation,
+                    # memory_update_policy) is completely unaffected
+                    # and never sees this sentinel at all.
 
 class DetailLevel(enum.IntEnum):
     """IntEnum, not bool -- ordering (>=) is how compose() checks
@@ -55,7 +63,7 @@ class ExtractedGoal(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     intent: GoalExtractionIntent
-    goal_relation: GoalRelation | None = None
+    goal_relation: GoalRelation = GoalRelation.NONE
     goal_summary: str | None = None
     mentioned_entities: list[str] = []
     candidate_agents: list[str] = []  # AgentName values as raw strings; corrected by Grounding
@@ -135,25 +143,14 @@ class ConversationExecutionPlan:
     def executed_results(self) -> list[CapabilityResult]:
         return [r for step in self.steps if step.status == ConversationStepStatus.EXECUTED for r in step.results]
     
+    
 @dataclass(frozen=True)
 class AgentExecutionContext:
-    """The single, stable execution context every Agent other than
-    StrategyBuilderAgent receives (StrategyBuilderAgent is the
-    permanent legacy exception carrying ConversationState + draft
-    directly). Bundles GroundedContext with ConversationMemory so the
-    contract can grow later (preferences, permissions, request
-    metadata, etc.) without repeatedly changing every Agent's
-    execute() signature.
-
-    ConversationMemory here is READ-ONLY from every Agent's
-    perspective -- only memory_update_policy.py writes Memory. No
-    Agent should ever attempt to mutate it, even to "just update one
-    field." ConversationMemory is frozen specifically to make that
-    fail loudly rather than silently succeed.
-    """
+    """..."""
 
     grounded_context: GroundedContext
     memory: ConversationMemory
     draft: StrategyConfig | None = None
     strategy_id: uuid.UUID | None = None
+    user_id: uuid.UUID | None = None
     prior_results: list[CapabilityResult] = field(default_factory=list)

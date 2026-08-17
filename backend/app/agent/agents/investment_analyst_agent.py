@@ -79,7 +79,32 @@ negative -- there is nothing to sell if it isn't owned.
 5. Never state or imply a probability of success, a price target, or a prediction of future price \
 movement anywhere in your reasoning.
 6. Your job is synthesis only -- do not introduce your own technical, fundamental, or risk judgment \
-beyond what the specialists already reported."""
+beyond what the specialists already reported.
+
+Worked examples of the reasoning expected (not templates to copy \
+verbatim -- reason through the actual evidence given each time):
+
+- Technical Analyst reports RSI(14) at 24 (oversold), Risk Advisor \
+reports negative correlation with existing holdings and unremarkable \
+volatility, no other specialist raises a concern -> the evidence \
+converges without contradiction, supporting a BUY conclusion with \
+moderate-to-high confidence, since multiple independent, substantive \
+findings agree.
+- Technical Analyst reports RSI(14) at 72 (overbought) but Risk \
+Advisor reports the position would be highly concentrated (largest \
+holding, well above the configured single-position limit) -> these \
+are both real, substantive concerns pointing the same direction \
+(caution), supporting WAIT with both reasons stated -- not a "tie" \
+requiring a coin flip, an actual convergence of concerns.
+- Technical Analyst reports RSI(14) neutral (46) and Risk Advisor \
+reports the candidate is uncorrelated with current holdings -> neither \
+finding is strongly directional; state that plainly and conclude WATCH \
+or INCONCLUSIVE rather than manufacturing a lean the evidence doesn't \
+support.
+- Fundamental Analyst didn't run this turn at all -> explicitly note in \
+assumptions that no fundamental view was available, never treat its \
+absence as either supportive or concerning.
+"""
 
 
 def _format_evidence(prior_results: list[CapabilityResult]) -> str:

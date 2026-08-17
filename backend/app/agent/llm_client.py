@@ -15,7 +15,16 @@ from pydantic import BaseModel
 from app.agent.llm_service import LLMService
 
 T = TypeVar("T", bound=BaseModel)
-
+_MAX_TOKENS = 2048
+# Groq's tokens-per-minute limit for this model/tier counts the
+# *requested* max_tokens reservation itself, not actual usage --
+# confirmed by hitting a real 413 with max_tokens=8192 alone (before
+# any prompt content), against a documented account ceiling of 8000
+# TPM. 2048 leaves ~6000 tokens of real headroom for prompt content
+# (system prompt + conversation history + memory context) while still
+# being well above whatever Groq's undocumented default was, which was
+# too small to let a reasoning-style model finish a nontrivial
+# extraction (the original failure this whole fix exists for).
 
 class LLMClient(LLMService):
     def __init__(self, api_key: str, model: str) -> None:
@@ -27,27 +36,41 @@ class LLMClient(LLMService):
     ) -> T:
         schema = _make_strict_compatible(response_model.model_json_schema())
 
-        response = self._client.chat.completions.create(  # type: ignore[call-overload]
-            model=self._model,
-            messages=messages,
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": schema_name,
-                    "strict": True,
-                    "schema": schema,
-                },
-            },
-        )
+        last_error: Exception | None = None
+        for attempt in range(2):  # one retry -- structured-output generation
+                                    # occasionally produces invalid JSON on a
+                                    # given attempt even with a good prompt;
+                                    # this is inherent to the approach, not
+                                    # something a better prompt eliminates.
+            try:
+                response = self._client.chat.completions.create(  # type: ignore[call-overload]
+                    model=self._model,
+                    messages=messages,
+                    max_tokens=_MAX_TOKENS,
+                    response_format={
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": schema_name,
+                            "strict": True,
+                            "schema": schema,
+                        },
+                    },
+                )
+                content = response.choices[0].message.content
+                if content is None:
+                    raise ValueError("Groq returned an empty response with no content")
+                return response_model.model_validate(json.loads(content))
+            except Exception as e:
+                last_error = e
+                continue
 
-        content = response.choices[0].message.content
-        if content is None:
-            raise ValueError("Groq returned an empty response with no content")
-
-        return response_model.model_validate(json.loads(content))
+        assert last_error is not None
+        raise last_error
 
     def generate_text(self, messages: list[dict]) -> str:
-        response = self._client.chat.completions.create(model=self._model, messages=messages)  # type: ignore[call-overload, arg-type]
+        response = self._client.chat.completions.create(
+            model=self._model, messages=messages, max_tokens=_MAX_TOKENS,  # type: ignore[call-overload, arg-type]
+        )
         content = response.choices[0].message.content
         if content is None:
             raise ValueError("Groq returned an empty response with no content")

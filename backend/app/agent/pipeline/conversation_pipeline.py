@@ -118,6 +118,7 @@ class ConversationPipeline:
         state: ConversationState | None,
         turn: int,
         strategy_id: uuid.UUID | None = None,
+        user_id: uuid.UUID | None = None,
     ) -> PipelineResult:
         extracted = self._goal_extractor.extract(user_message, conversation_history, memory)
         context = ground(extracted, user_message, memory, self._asset_directory)
@@ -130,7 +131,7 @@ class ConversationPipeline:
         )
 
         exec_context = AgentExecutionContext(
-            grounded_context=context, memory=memory, draft=draft, strategy_id=strategy_id
+            grounded_context=context, memory=memory, draft=draft, strategy_id=strategy_id, user_id=user_id,
         )
 
         plan = build_execution_plan(context)
@@ -165,7 +166,7 @@ class ConversationPipeline:
             elif planned_step.agent == AgentName.INVESTMENT_ANALYST and self._investment_analyst_agent is not None:
                 investment_context = AgentExecutionContext(
                     grounded_context=context, memory=memory, draft=draft, strategy_id=strategy_id,
-                    prior_results=accumulated_results,
+                    user_id=user_id, prior_results=accumulated_results,
                 )
                 results = self._investment_analyst_agent.execute(investment_context)
             elif planned_step.agent == AgentName.PERFORMANCE_ANALYST and self._performance_analyst_agent is not None:
