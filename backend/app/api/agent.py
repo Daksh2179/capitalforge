@@ -71,6 +71,7 @@ from app.schemas.strategy import StrategyConfig, StrategyResponse, StrategyVersi
 from app.services import strategy_service
 from app.trading_engine.market_data.alpaca_market_data import AlpacaMarketData
 from app.trading_engine.market_data.provider import MarketDataProvider
+from app.agent.agents.backtest_analyst_agent import BacktestAnalystAgent
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 _logger = logging.getLogger(__name__)
@@ -138,6 +139,7 @@ def _get_conversation_pipeline(
         fundamental_analyst_agent=FundamentalAnalystAgent(finnhub_client),
         investment_analyst_agent=InvestmentAnalystAgent(llm),
         performance_analyst_agent=PerformanceAnalystAgent(db),
+        backtest_analyst_agent=BacktestAnalystAgent(db, market_data, translation_service),
     )
 
 

@@ -2,29 +2,38 @@
 -> Execution Plan -> execute each planned step -> Memory update ->
 Response Composer.
 
-STRATEGY_BUILDER and STRATEGY_EDITOR both route to the same
-StrategyBuilderAgent instance. MarketResearchAgent, TechnicalAnalystAgent,
-EducatorAgent, StrategyExplainerAgent, PortfolioAnalystAgent,
-RiskAdvisorAgent, FundamentalAnalystAgent, and PerformanceAnalystAgent
-all consume a single AgentExecutionContext.
+Execution is no longer purely sequential. Real Agents make real
+network calls (Alpaca, Finnhub, Groq), and running unrelated ones
+one-after-another was adding real, needless latency (a single turn
+touching MarketResearch + TechnicalAnalyst + FundamentalAnalyst was
+paying for three sequential round-trips for no structural reason).
 
-InvestmentAnalystAgent is the one exception to "every step runs in
-isolation": results are accumulated across the loop as they execute,
-and InvestmentAnalystAgent (scheduled last by planner.py) receives
-everything accumulated so far via a second, extended
-AgentExecutionContext carrying prior_results.
+Four phases, in order:
+1. STRATEGY_BUILDER/STRATEGY_EDITOR (sequential, mutates draft/state --
+   the only step that does).
+2. Independent, I/O-bound Agents that never touch the shared database
+   Session (MarketResearch, TechnicalAnalyst, Educator,
+   StrategyExplainer, FundamentalAnalyst) -- run CONCURRENTLY via a
+   thread pool. Real, since a Python thread blocked on network I/O
+   releases the GIL; this is a genuine latency win, not a fake one.
+3. Agents that DO share the one request-scoped SQLAlchemy Session
+   (PortfolioAnalyst, RiskAdvisor, PerformanceAnalyst) -- sequential
+   with each other, deliberately. SQLAlchemy Sessions are not
+   thread-safe; running these concurrently would risk real data
+   corruption, not just be inelegant. This is a real constraint, not
+   a conservative default chosen for no reason.
+4. InvestmentAnalyst (if present) -- always last, per planner.py's one
+   ordering rule, since it needs every other step's results already
+   accumulated.
 
-PipelineResult.draft: a real bug, found before this was wired live --
-the STRATEGY_BUILDER/STRATEGY_EDITOR branch previously discarded the
-third element of StrategyBuilderAgent.execute()'s return (the raw
-TranslationResult, which carries the actual updated StrategyConfig),
-keeping only the CapabilityResults and the new ConversationState. A
-caller had no way to get the real updated draft at all. Fixed by
-threading it through explicitly; every other turn type passes the
-input draft through unchanged.
+Output order in the final plan always matches the ORIGINAL planned
+order, regardless of which phase or what order things actually
+finished executing in -- ResponseComposer's priority logic depends on
+that ordering being meaningful, not on wall-clock completion order.
 """
 
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from app.agent.agent_contracts import AgentName
@@ -54,6 +63,12 @@ from app.agent.pipeline.types import (
     GroundedContext,
 )
 from app.schemas.strategy import StrategyConfig
+from typing import Protocol
+from app.agent.agents.backtest_analyst_agent import BacktestAnalystAgent
+
+
+class _Agent(Protocol):
+    def execute(self, context: AgentExecutionContext) -> list[CapabilityResult]: ...
 
 _DISPLAY_NAMES: dict[AgentName, str] = {
     AgentName.STRATEGY_BUILDER: "Strategy Building",
@@ -67,7 +82,11 @@ _DISPLAY_NAMES: dict[AgentName, str] = {
     AgentName.RISK_ADVISOR: "Risk Advisory",
     AgentName.INVESTMENT_ANALYST: "Investment Analysis",
     AgentName.EDUCATOR: "Educational Explanation",
+    AgentName.BACKTEST_ANALYST: "Backtest Analysis",
 }
+
+_DB_SHARED_AGENTS = {AgentName.PORTFOLIO_ANALYST, AgentName.RISK_ADVISOR, AgentName.PERFORMANCE_ANALYST, AgentName.BACKTEST_ANALYST}
+_SEQUENTIAL_FIRST = {AgentName.STRATEGY_BUILDER, AgentName.STRATEGY_EDITOR}
 
 
 @dataclass(frozen=True)
@@ -95,19 +114,25 @@ class ConversationPipeline:
         fundamental_analyst_agent: FundamentalAnalystAgent | None = None,
         investment_analyst_agent: InvestmentAnalystAgent | None = None,
         performance_analyst_agent: PerformanceAnalystAgent | None = None,
+        backtest_analyst_agent: BacktestAnalystAgent | None = None,
     ) -> None:
         self._goal_extractor = goal_extractor
         self._asset_directory = asset_directory
         self._strategy_builder_agent = strategy_builder_agent
-        self._market_research_agent = market_research_agent
-        self._technical_analyst_agent = technical_analyst_agent
-        self._educator_agent = educator_agent
-        self._strategy_explainer_agent = strategy_explainer_agent
-        self._portfolio_analyst_agent = portfolio_analyst_agent
-        self._risk_advisor_agent = risk_advisor_agent
-        self._fundamental_analyst_agent = fundamental_analyst_agent
+        self._agents: dict[AgentName, _Agent] = {
+            k: v for k, v in {
+                AgentName.MARKET_RESEARCH: market_research_agent,
+                AgentName.TECHNICAL_ANALYST: technical_analyst_agent,
+                AgentName.EDUCATOR: educator_agent,
+                AgentName.STRATEGY_EXPLAINER: strategy_explainer_agent,
+                AgentName.PORTFOLIO_ANALYST: portfolio_analyst_agent,
+                AgentName.RISK_ADVISOR: risk_advisor_agent,
+                AgentName.FUNDAMENTAL_ANALYST: fundamental_analyst_agent,
+                AgentName.PERFORMANCE_ANALYST: performance_analyst_agent,
+                AgentName.BACKTEST_ANALYST: backtest_analyst_agent,
+            }.items() if v is not None
+        }
         self._investment_analyst_agent = investment_analyst_agent
-        self._performance_analyst_agent = performance_analyst_agent
 
     def handle_turn(
         self,
@@ -137,52 +162,76 @@ class ConversationPipeline:
         plan = build_execution_plan(context)
         new_state = state
         new_draft = draft
-        finalized_steps: list[ConversationExecutionStep] = []
-        accumulated_results: list[CapabilityResult] = []
+        step_output: dict[int, tuple[ConversationStepStatus, list[CapabilityResult] | None]] = {}
 
-        for planned_step in plan.steps:
-            results: list[CapabilityResult] | None = None
-            status = ConversationStepStatus.EXECUTED
-
-            if planned_step.agent in (AgentName.STRATEGY_BUILDER, AgentName.STRATEGY_EDITOR):
-                results, new_state, raw_translation_result = self._strategy_builder_agent.execute(
+        # Phase 1: builder/editor, sequential -- the only step that
+        # mutates draft/state.
+        for i, planned_step in enumerate(plan.steps):
+            if planned_step.agent in _SEQUENTIAL_FIRST:
+                builder_results, new_state, raw_translation_result = self._strategy_builder_agent.execute(
                     user_message, conversation_history, draft, state
                 )
                 new_draft = raw_translation_result.draft
-            elif planned_step.agent == AgentName.MARKET_RESEARCH and self._market_research_agent is not None:
-                results = self._market_research_agent.execute(exec_context)
-            elif planned_step.agent == AgentName.TECHNICAL_ANALYST and self._technical_analyst_agent is not None:
-                results = self._technical_analyst_agent.execute(exec_context)
-            elif planned_step.agent == AgentName.EDUCATOR and self._educator_agent is not None:
-                results = self._educator_agent.execute(exec_context)
-            elif planned_step.agent == AgentName.STRATEGY_EXPLAINER and self._strategy_explainer_agent is not None:
-                results = self._strategy_explainer_agent.execute(exec_context)
-            elif planned_step.agent == AgentName.PORTFOLIO_ANALYST and self._portfolio_analyst_agent is not None:
-                results = self._portfolio_analyst_agent.execute(exec_context)
-            elif planned_step.agent == AgentName.RISK_ADVISOR and self._risk_advisor_agent is not None:
-                results = self._risk_advisor_agent.execute(exec_context)
-            elif planned_step.agent == AgentName.FUNDAMENTAL_ANALYST and self._fundamental_analyst_agent is not None:
-                results = self._fundamental_analyst_agent.execute(exec_context)
-            elif planned_step.agent == AgentName.INVESTMENT_ANALYST and self._investment_analyst_agent is not None:
-                investment_context = AgentExecutionContext(
-                    grounded_context=context, memory=memory, draft=draft, strategy_id=strategy_id,
-                    user_id=user_id, prior_results=accumulated_results,
-                )
-                results = self._investment_analyst_agent.execute(investment_context)
-            elif planned_step.agent == AgentName.PERFORMANCE_ANALYST and self._performance_analyst_agent is not None:
-                results = self._performance_analyst_agent.execute(exec_context)
-            else:
-                status = ConversationStepStatus.SKIPPED_NOT_IMPLEMENTED
+                step_output[i] = (ConversationStepStatus.EXECUTED, builder_results)
 
+        # Phase 2: independent, non-database Agents -- concurrent.
+        concurrent_indices = [
+            i for i, s in enumerate(plan.steps)
+            if s.agent not in _SEQUENTIAL_FIRST and s.agent != AgentName.INVESTMENT_ANALYST
+            and s.agent not in _DB_SHARED_AGENTS and s.agent in self._agents
+        ]
+        if concurrent_indices:
+            with ThreadPoolExecutor(max_workers=len(concurrent_indices)) as pool:
+                futures = {i: pool.submit(self._agents[plan.steps[i].agent].execute, exec_context) for i in concurrent_indices}
+                for i, future in futures.items():
+                    step_output[i] = (ConversationStepStatus.EXECUTED, future.result())
+
+        # Phase 3: database-sharing Agents -- sequential with each other.
+        for i, planned_step in enumerate(plan.steps):
+            if planned_step.agent in _DB_SHARED_AGENTS and planned_step.agent in self._agents:
+                step_output[i] = (ConversationStepStatus.EXECUTED, self._agents[planned_step.agent].execute(exec_context))
+
+        # Fill in "not implemented" for anything untouched above.
+        for i, planned_step in enumerate(plan.steps):
+            if i not in step_output:
+                step_output[i] = (ConversationStepStatus.SKIPPED_NOT_IMPLEMENTED, None)
+
+        finalized_steps: list[ConversationExecutionStep] = []
+        accumulated_results: list[CapabilityResult] = []
+        investment_analyst_index: int | None = None
+
+        for i, planned_step in enumerate(plan.steps):
+            if planned_step.agent == AgentName.INVESTMENT_ANALYST:
+                investment_analyst_index = i
+                continue  # handled in phase 4, after accumulation below
+            status, results = step_output[i]
             if status == ConversationStepStatus.EXECUTED and results is not None:
-                finalized_steps.append(ConversationExecutionStep(
-                    agent=planned_step.agent, status=status, results=results,
-                ))
+                finalized_steps.append(ConversationExecutionStep(agent=planned_step.agent, status=status, results=results))
                 accumulated_results.extend(results)
             else:
                 display = _DISPLAY_NAMES.get(planned_step.agent, planned_step.agent.value)
                 finalized_steps.append(ConversationExecutionStep(
                     agent=planned_step.agent, status=ConversationStepStatus.SKIPPED_NOT_IMPLEMENTED,
+                    reason=f"I understood this as a {display} request, but that Agent hasn't been implemented yet.",
+                ))
+
+        # Phase 4: InvestmentAnalyst, if planned -- always last, with
+        # everything accumulated above.
+        if investment_analyst_index is not None:
+            if self._investment_analyst_agent is not None:
+                investment_context = AgentExecutionContext(
+                    grounded_context=context, memory=memory, draft=draft, strategy_id=strategy_id,
+                    user_id=user_id, prior_results=accumulated_results,
+                )
+                investment_results = self._investment_analyst_agent.execute(investment_context)
+                finalized_steps.append(ConversationExecutionStep(
+                    agent=AgentName.INVESTMENT_ANALYST, status=ConversationStepStatus.EXECUTED, results=investment_results,
+                ))
+                accumulated_results.extend(investment_results)
+            else:
+                display = _DISPLAY_NAMES.get(AgentName.INVESTMENT_ANALYST, AgentName.INVESTMENT_ANALYST.value)
+                finalized_steps.append(ConversationExecutionStep(
+                    agent=AgentName.INVESTMENT_ANALYST, status=ConversationStepStatus.SKIPPED_NOT_IMPLEMENTED,
                     reason=f"I understood this as a {display} request, but that Agent hasn't been implemented yet.",
                 ))
 

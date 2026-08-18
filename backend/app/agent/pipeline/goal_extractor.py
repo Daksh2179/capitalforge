@@ -92,6 +92,9 @@ portfolio ("what's on my watchlist", "what have I added") also route \
 to candidate_agents=[portfolio_analyst], same as questions about an \
 active strategy.
 
+- "Backtest my current strategy for 3 months" / "what if I used RSI 25 \
+instead" / "would I have done better just holding SPY?" -> intent=review, \
+candidate_agents=[backtest_analyst]
 """
 
 

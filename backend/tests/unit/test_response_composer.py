@@ -136,3 +136,20 @@ def test_empty_plan_produces_empty_response():
     assert response.segments == []
     assert response.text == ""
     assert response.surfaced_clarification is None
+    
+def test_limitations_are_deduplicated_and_appended():
+    plan = ConversationExecutionPlan(steps=[
+        _executed(AgentName.BACKTEST_ANALYST, CapabilityResult(
+            agent=AgentName.BACKTEST_ANALYST, description="AAPL", facts=["AAPL: +5%"],
+            limitations=["Assumes $100,000."],
+        )),
+        _executed(AgentName.BACKTEST_ANALYST, CapabilityResult(
+            agent=AgentName.BACKTEST_ANALYST, description="MSFT", facts=["MSFT: +3%"],
+            limitations=["Assumes $100,000.", "Independent per-rule backtest."],
+        )),
+    ])
+    response = compose(plan)
+
+    assumptions_segment = next(s for s in response.segments if s.text.startswith("Assumptions:"))
+    assert assumptions_segment.text.count("$100,000") == 1  # deduplicated, not repeated
+    assert "Independent per-rule backtest." in assumptions_segment.text

@@ -29,6 +29,7 @@ class AgentName(str, enum.Enum):
     RISK_ADVISOR = "risk_advisor"
     INVESTMENT_ANALYST = "investment_analyst"
     EDUCATOR = "educator"
+    BACKTEST_ANALYST = "backtest_analyst"
 
 
 class Conclusion(str, enum.Enum):
@@ -113,8 +114,11 @@ class CapabilityResult(BaseModel):
 
     clarification: ClarificationRequest | None = None
     resolves_prior_thread: bool = False
-    evidence_signal: str | None = None  # "supportive" | "concerning" | "neutral" | None
+    evidence_signal: str | None = None
     held_position: bool | None = None
+    limitations: list[str] = []
+    
+    
 
     @model_validator(mode="after")
     def _draft_change_and_recommendation_are_mutually_exclusive(self) -> "CapabilityResult":

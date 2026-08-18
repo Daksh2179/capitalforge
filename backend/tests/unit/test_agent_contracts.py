@@ -46,3 +46,7 @@ def test_result_with_neither_is_valid():
     result = CapabilityResult(agent=AgentName.MARKET_RESEARCH, description="Reported AAPL's price")
     assert result.draft_change is None
     assert result.recommendation is None
+    
+def test_limitations_defaults_to_empty_list():
+    result = CapabilityResult(agent=AgentName.TECHNICAL_ANALYST, description="x")
+    assert result.limitations == []

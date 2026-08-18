@@ -5,7 +5,7 @@ for real, every other confirmed Agent produces the explicit
 fallback or a fabricated answer, and Memory only ever reflects real
 executions."""
 
-from app.agent.agent_contracts import AgentName
+from app.agent.agent_contracts import AgentName, CapabilityResult
 from app.agent.agents.strategy_builder_agent import StrategyBuilderAgent
 from app.agent.conversation_memory import ConversationMemory
 from app.agent.llm_service import LLMService
@@ -450,3 +450,84 @@ def test_performance_analyst_agent_executes_for_real_when_provided(db_session):
 
     assert result.plan.steps[0].status == ConversationStepStatus.EXECUTED
     assert "+5.00%" in result.response.text
+    
+def test_independent_agents_execute_concurrently_not_sequentially():
+    import time
+
+    class SlowMarketResearch:
+        def execute(self, context):
+            time.sleep(0.3)
+            return [CapabilityResult(agent=AgentName.MARKET_RESEARCH, description="slow", facts=["market fact"])]
+
+    class SlowEducator:
+        def execute(self, context):
+            time.sleep(0.3)
+            return [CapabilityResult(agent=AgentName.EDUCATOR, description="slow", facts=["educator fact"])]
+
+    goal = ExtractedGoal(intent=GoalExtractionIntent.RESEARCH, candidate_agents=["market_research", "educator"])
+    goal_extractor = GoalExtractor(FakeGoalExtractionLLM(goal))
+    directory = FakeAssetDirectory()
+    translation_service = TranslationService(FakeTranslationLLM(IntentBatch(intents=[])), FakeMarketDataProvider(), directory)
+    strategy_builder = StrategyBuilderAgent(translation_service)
+
+    pipeline = ConversationPipeline(
+        goal_extractor, directory, strategy_builder,
+        market_research_agent=SlowMarketResearch(), educator_agent=SlowEducator(),
+    )
+
+    start = time.monotonic()
+    result = pipeline.handle_turn("test", [], None, ConversationMemory(), None, turn=1)
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 0.55  # well under 0.6s (two sequential 0.3s calls) -- generous margin for CI variance
+    assert "market fact" in result.response.text
+    assert "educator fact" in result.response.text
+    
+def test_backtest_analyst_agent_executes_for_real_when_provided(db_session):
+    from app.agent.agents.backtest_analyst_agent import BacktestAnalystAgent
+    from app.services import strategy_service
+    from datetime import datetime, timedelta, timezone
+    from app.trading_engine.domain.market_bar import MarketBar
+    from app.trading_engine.market_data.provider import MarketDataProvider
+    import uuid as uuid_module
+
+    strategy = strategy_service.create_strategy(
+        db_session, user_id=uuid_module.uuid4(),
+        config_json={
+            "schema_version": 3, "portfolio_rules": {},
+            "asset_rules": [{
+                "symbol": "AAPL",
+                "buy_conditions": {"operator": "AND", "rules": [{"indicator": "PRICE", "period": 1, "operator": "less_than", "value": 99999}]},
+                "sell_conditions": {"operator": "AND", "rules": [{"indicator": "PRICE", "period": 1, "operator": "greater_than", "value": 0}]},
+                "capital_allocation": {"type": "percentage_of_portfolio", "percentage": 50},
+                "exit": {},
+            }],
+        },
+        source="manual", confirmed_now=True,
+    )
+    db_session.refresh(strategy)
+
+    class FakeBacktestMarketDataProvider(MarketDataProvider):
+        def get_historical_bars(self, symbol, timeframe, start, end):
+            base = datetime.now(timezone.utc) - timedelta(days=30)
+            return [
+                MarketBar(symbol=symbol, timestamp=base + timedelta(days=i),
+                          open=100.0, high=101.0, low=99.0, close=100.0 + i, volume=100_000.0)
+                for i in range(30)
+            ]
+
+    goal = ExtractedGoal(intent=GoalExtractionIntent.REVIEW, candidate_agents=["backtest_analyst"])
+    goal_extractor = GoalExtractor(FakeGoalExtractionLLM(goal))
+    directory = FakeAssetDirectory()
+    translation_service = TranslationService(FakeTranslationLLM(IntentBatch(intents=[])), FakeMarketDataProvider(), directory)
+    strategy_builder = StrategyBuilderAgent(translation_service)
+    backtest_analyst = BacktestAnalystAgent(db_session, FakeBacktestMarketDataProvider(), translation_service)
+
+    pipeline = ConversationPipeline(goal_extractor, directory, strategy_builder, backtest_analyst_agent=backtest_analyst)
+    result = pipeline.handle_turn(
+        "backtest my strategy", [], None, ConversationMemory(), None, turn=1, strategy_id=strategy.id,
+    )
+
+    assert result.plan.steps[0].status == ConversationStepStatus.EXECUTED
+    assert "AAPL" in result.response.text
+    assert "Assumptions:" in result.response.text

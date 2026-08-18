@@ -150,6 +150,16 @@ def compose(plan: ConversationExecutionPlan, detail_level: DetailLevel = DetailL
     elif interpretations:
         segments.append(TextSegment(interpretations[0]))
 
+    limitations: list[str] = []
+    seen_limitations: set[str] = set()
+    for result in normal_results:
+        for limitation in result.limitations:
+            if limitation not in seen_limitations:
+                seen_limitations.add(limitation)
+                limitations.append(limitation)
+    if limitations:
+        segments.append(TextSegment("Assumptions: " + " ".join(limitations)))
+
     for step in not_implemented:
         if step.reason:
             segments.append(TextSegment(step.reason))
