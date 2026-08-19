@@ -13,6 +13,13 @@ connected to each other at all before this.
 Distinct from PerformanceAnalystAgent's "how has it performed over
 time" -- this Agent answers "what's the current picture," not trends.
 
+Strategy health (opportunity/selection/deferral counts) is folded into
+the same "how's my strategy doing" summary rather than requiring a
+separate trigger phrase -- it's directly relevant context for exactly
+that question, computed straight from plan_outcome/risk_approved,
+which were already recorded on every DecisionLog row and previously
+never aggregated into anything.
+
 V1 scope, deliberately narrow (see docs/decisions.md, "DecisionLog as
 evaluation history"): "why didn't you buy/sell X" reports the real,
 persisted reason when a buy/sell was actually evaluated and blocked.
@@ -21,6 +28,7 @@ it cannot say "RSI was 34, not yet below 30," since that computed
 value isn't persisted for HOLD outcomes today.
 """
 
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -141,7 +149,65 @@ class PortfolioAnalystAgent:
                     "I don't have a recorded portfolio snapshot yet -- the strategy may not have completed a full cycle."
                 )
 
+            health_fact = self._summarize_health(context.strategy_id)
+            if health_fact:
+                facts.append(health_fact)
+
         if not facts:
             facts.append("You don't have anything on your watchlist or an active strategy yet.")
 
         return CapabilityResult(agent=self.name, description="Summarized portfolio and watchlist", facts=facts)
+
+    def _summarize_health(self, strategy_id) -> str | None:
+        """Aggregate counts straight from plan_outcome/risk_approved --
+        both axes already recorded on every DecisionLog row, genuinely
+        independent of each other (a "selected" row can still have
+        risk_approved=False if the real portfolio diverged from the
+        planner's simulation at execution time -- see decision_log.py's
+        own comment on this). Bucketed to be mutually exclusive and
+        honest about what's actually recorded -- nothing inferred,
+        nothing approximated.
+        """
+        strategy = strategy_service.get_strategy(self._db, strategy_id=strategy_id)
+        if strategy is None or strategy.current_version_id is None:
+            return None
+
+        logs = trading_cycle_service.list_decision_logs(
+            self._db, strategy_version_id=strategy.current_version_id, limit=_RECENT_LOOKBACK
+        )
+        if not logs:
+            return None
+
+        buy_logs = [log for log in logs if log.action_taken == "buy"]
+        sell_logs = [log for log in logs if log.action_taken == "sell"]
+        hold_count = sum(1 for log in logs if log.action_taken == "hold")
+
+        executed = sum(1 for log in buy_logs if log.plan_outcome == "selected" and log.risk_approved)
+        blocked_after_selection = sum(1 for log in buy_logs if log.plan_outcome == "selected" and not log.risk_approved)
+        deferred = sum(1 for log in buy_logs if log.plan_outcome == "deferred")
+        skipped_liquidity = sum(1 for log in buy_logs if log.plan_outcome == "skipped_liquidity")
+        sells_executed = sum(1 for log in sell_logs if log.risk_approved)
+        sells_blocked = sum(1 for log in sell_logs if not log.risk_approved)
+
+        parts = [f"Over the last {len(logs)} evaluation(s) I have on record: {hold_count} resulted in no action"]
+        if buy_logs:
+            detail = (
+                f"{executed} executed, {deferred} deferred due to capital competition, "
+                f"{skipped_liquidity} skipped for liquidity"
+            )
+            if blocked_after_selection:
+                detail += f", {blocked_after_selection} selected but blocked at execution"
+            parts.append(f"{len(buy_logs)} buy condition(s) triggered ({detail})")
+        if sell_logs:
+            parts.append(f"{len(sell_logs)} sell condition(s) triggered ({sells_executed} executed, {sells_blocked} blocked)")
+
+        summary = ", ".join(parts) + "."
+
+        triggering_logs = [log for log in logs if log.action_taken in ("buy", "sell")]
+        if triggering_logs:
+            days_since = (datetime.now(timezone.utc) - triggering_logs[0].timestamp).days
+            summary += f" The most recent buy/sell trigger was {days_since} day(s) ago."
+        else:
+            summary += " No buy or sell condition has triggered in the recorded history I have."
+
+        return summary

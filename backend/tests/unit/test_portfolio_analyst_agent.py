@@ -163,3 +163,55 @@ def test_held_position_is_false_when_symbol_not_in_latest_snapshot(db_session):
     agent = PortfolioAnalystAgent(db_session)
     results = agent.execute(_context(strategy_id=strategy.id, resolved_entities=[_resolved("AAPL")]))
     assert results[0].held_position is False
+    
+def test_summary_includes_health_counts_from_decision_logs(db_session):
+    strategy = _create_strategy(db_session)
+    db_session.add(PortfolioSnapshot(
+        strategy_id=strategy.id, timestamp=datetime.now(timezone.utc),
+        cash_balance=1000.0, positions_json={}, total_value=1000.0,
+    ))
+    db_session.add(DecisionLog(
+        strategy_version_id=strategy.current_version_id, timestamp=datetime.now(timezone.utc),
+        market_snapshot_json={"symbol": "AAPL", "close": 190.0}, rules_triggered_json=[],
+        action_taken="buy", risk_approved=True, risk_reason="approved", plan_outcome="selected",
+    ))
+    db_session.add(DecisionLog(
+        strategy_version_id=strategy.current_version_id, timestamp=datetime.now(timezone.utc),
+        market_snapshot_json={"symbol": "NVDA", "close": 200.0}, rules_triggered_json=[],
+        action_taken="buy", risk_approved=False, risk_reason="deferred: capital already committed",
+        plan_outcome="deferred",
+    ))
+    db_session.add(DecisionLog(
+        strategy_version_id=strategy.current_version_id, timestamp=datetime.now(timezone.utc),
+        market_snapshot_json={"symbol": "AAPL", "close": 190.0}, rules_triggered_json=[],
+        action_taken="hold", risk_approved=False, risk_reason="not evaluated by risk manager",
+    ))
+    db_session.commit()
+
+    agent = PortfolioAnalystAgent(db_session)
+    results = agent.execute(_context(strategy.id))
+
+    facts_text = " ".join(results[0].facts)
+    assert "1 resulted in no action" in facts_text
+    assert "2 buy condition(s) triggered (1 executed, 1 deferred" in facts_text
+    assert "most recent buy/sell trigger was 0 day(s) ago" in facts_text
+
+
+def test_summary_reports_no_trigger_history_honestly(db_session):
+    strategy = _create_strategy(db_session)
+    db_session.add(PortfolioSnapshot(
+        strategy_id=strategy.id, timestamp=datetime.now(timezone.utc),
+        cash_balance=1000.0, positions_json={}, total_value=1000.0,
+    ))
+    db_session.add(DecisionLog(
+        strategy_version_id=strategy.current_version_id, timestamp=datetime.now(timezone.utc),
+        market_snapshot_json={"symbol": "AAPL", "close": 190.0}, rules_triggered_json=[],
+        action_taken="hold", risk_approved=False, risk_reason="not evaluated by risk manager",
+    ))
+    db_session.commit()
+
+    agent = PortfolioAnalystAgent(db_session)
+    results = agent.execute(_context(strategy.id))
+
+    facts_text = " ".join(results[0].facts)
+    assert "No buy or sell condition has triggered in the recorded history" in facts_text
