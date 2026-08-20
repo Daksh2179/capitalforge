@@ -95,6 +95,13 @@ active strategy.
 - "Backtest my current strategy for 3 months" / "what if I used RSI 25 \
 instead" / "would I have done better just holding SPY?" -> intent=review, \
 candidate_agents=[backtest_analyst]
+
+- "Add NVDA to my portfolio" / "Remove NEE from my portfolio" -> \
+intent=edit, candidate_agents=[portfolio_analyst]
+- "Add NVDA to my portfolio and buy it when RSI < 30" -> intent=edit, \
+candidate_agents=[portfolio_analyst, strategy_builder] -- these are two \
+INDEPENDENT actions this system deliberately never links automatically; \
+both must run and both get reported.
 """
 
 

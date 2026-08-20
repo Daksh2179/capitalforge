@@ -1,6 +1,6 @@
 """ConversationPipeline: the orchestrator. Goal Extraction -> Grounding
--> Execution Plan -> execute each planned step -> Memory update ->
-Response Composer.
+-> Execution Plan -> execute each planned step -> apply any declared
+portfolio mutations -> Memory update -> Response Composer.
 
 Execution is no longer purely sequential. Real Agents make real
 network calls (Alpaca, Finnhub, Groq), and running unrelated ones
@@ -17,11 +17,10 @@ Four phases, in order:
    thread pool. Real, since a Python thread blocked on network I/O
    releases the GIL; this is a genuine latency win, not a fake one.
 3. Agents that DO share the one request-scoped SQLAlchemy Session
-   (PortfolioAnalyst, RiskAdvisor, PerformanceAnalyst) -- sequential
-   with each other, deliberately. SQLAlchemy Sessions are not
-   thread-safe; running these concurrently would risk real data
-   corruption, not just be inelegant. This is a real constraint, not
-   a conservative default chosen for no reason.
+   (PortfolioAnalyst, RiskAdvisor, PerformanceAnalyst, BacktestAnalyst)
+   -- sequential with each other, deliberately. SQLAlchemy Sessions
+   are not thread-safe; running these concurrently would risk real
+   data corruption, not just be inelegant.
 4. InvestmentAnalyst (if present) -- always last, per planner.py's one
    ordering rule, since it needs every other step's results already
    accumulated.
@@ -30,13 +29,26 @@ Output order in the final plan always matches the ORIGINAL planned
 order, regardless of which phase or what order things actually
 finished executing in -- ResponseComposer's priority logic depends on
 that ordering being meaningful, not on wall-clock completion order.
+
+Portfolio mutations: no Agent ever calls portfolio_service directly --
+PortfolioAnalystAgent only ever DECLARES a PortfolioChange on its
+CapabilityResult. apply_portfolio_changes (injected here, optional,
+same additive pattern as every other pipeline capability) is the sole
+code path that performs the real mutation, running AFTER every Agent
+has finished reasoning but BEFORE compose() renders text and BEFORE
+Memory records anything -- so both the response and Memory always
+reflect what genuinely happened, never a prediction of what was about
+to happen.
 """
 
 import uuid
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from typing import Protocol
 
-from app.agent.agent_contracts import AgentName
+from app.agent.agent_contracts import AgentName, CapabilityResult
+from app.agent.agents.backtest_analyst_agent import BacktestAnalystAgent
 from app.agent.agents.educator_agent import EducatorAgent
 from app.agent.agents.fundamental_analyst_agent import FundamentalAnalystAgent
 from app.agent.agents.investment_analyst_agent import InvestmentAnalystAgent
@@ -56,19 +68,17 @@ from app.agent.pipeline.planner import build_execution_plan
 from app.agent.pipeline.response_composer import ComposedResponse, compose
 from app.agent.pipeline.types import (
     AgentExecutionContext,
-    CapabilityResult,
     ConversationExecutionPlan,
     ConversationExecutionStep,
     ConversationStepStatus,
     GroundedContext,
 )
 from app.schemas.strategy import StrategyConfig
-from typing import Protocol
-from app.agent.agents.backtest_analyst_agent import BacktestAnalystAgent
 
 
 class _Agent(Protocol):
     def execute(self, context: AgentExecutionContext) -> list[CapabilityResult]: ...
+
 
 _DISPLAY_NAMES: dict[AgentName, str] = {
     AgentName.STRATEGY_BUILDER: "Strategy Building",
@@ -85,7 +95,10 @@ _DISPLAY_NAMES: dict[AgentName, str] = {
     AgentName.BACKTEST_ANALYST: "Backtest Analysis",
 }
 
-_DB_SHARED_AGENTS = {AgentName.PORTFOLIO_ANALYST, AgentName.RISK_ADVISOR, AgentName.PERFORMANCE_ANALYST, AgentName.BACKTEST_ANALYST}
+_DB_SHARED_AGENTS = {
+    AgentName.PORTFOLIO_ANALYST, AgentName.RISK_ADVISOR,
+    AgentName.PERFORMANCE_ANALYST, AgentName.BACKTEST_ANALYST,
+}
 _SEQUENTIAL_FIRST = {AgentName.STRATEGY_BUILDER, AgentName.STRATEGY_EDITOR}
 
 
@@ -115,6 +128,7 @@ class ConversationPipeline:
         investment_analyst_agent: InvestmentAnalystAgent | None = None,
         performance_analyst_agent: PerformanceAnalystAgent | None = None,
         backtest_analyst_agent: BacktestAnalystAgent | None = None,
+        apply_portfolio_changes: Callable[[uuid.UUID | None, list[CapabilityResult]], list[CapabilityResult]] | None = None,
     ) -> None:
         self._goal_extractor = goal_extractor
         self._asset_directory = asset_directory
@@ -133,6 +147,7 @@ class ConversationPipeline:
             }.items() if v is not None
         }
         self._investment_analyst_agent = investment_analyst_agent
+        self._apply_portfolio_changes = apply_portfolio_changes
 
     def handle_turn(
         self,
@@ -236,6 +251,19 @@ class ConversationPipeline:
                 ))
 
         final_plan = ConversationExecutionPlan(steps=finalized_steps)
+
+        # Apply any declared portfolio mutations -- the ONLY place any
+        # Agent's declared PortfolioChange actually becomes real, and
+        # only right before composing/recording, so both reflect truth.
+        if self._apply_portfolio_changes is not None:
+            final_plan = ConversationExecutionPlan(steps=[
+                ConversationExecutionStep(
+                    agent=step.agent, status=step.status, reason=step.reason,
+                    results=self._apply_portfolio_changes(user_id, step.results),
+                )
+                for step in final_plan.steps
+            ])
+
         memory = apply_execution_update(memory, final_plan.executed_results, turn=turn)
         response = compose(final_plan, context.detail_level)
 

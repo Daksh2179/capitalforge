@@ -84,6 +84,25 @@ class ClarificationRequest(BaseModel):
     about: EntityReference | None = None
     candidates: list[str] = []
 
+class PortfolioChangeType(str, enum.Enum):
+    ADD = "add"
+    REMOVE = "remove"
+
+
+class PortfolioChange(BaseModel):
+    """The ONLY thing an Agent may declare about the user's
+    portfolio-in-progress -- never a direct portfolio_service call.
+    A separate, deterministic function (pipeline/portfolio_mutations.py)
+    is the sole code path that ever performs the actual mutation,
+    using the exact same portfolio_service the manual Portfolio-page
+    UI calls -- one source of truth, two front doors, never two
+    systems.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    change_type: PortfolioChangeType
+    symbol: str
 
 class CapabilityResult(BaseModel):
     """What every Agent returns, regardless of domain. description is
@@ -117,7 +136,7 @@ class CapabilityResult(BaseModel):
     evidence_signal: str | None = None
     held_position: bool | None = None
     limitations: list[str] = []
-    
+    portfolio_change: PortfolioChange | None = None
     
 
     @model_validator(mode="after")

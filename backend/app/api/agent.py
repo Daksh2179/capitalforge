@@ -72,6 +72,9 @@ from app.services import strategy_service
 from app.trading_engine.market_data.alpaca_market_data import AlpacaMarketData
 from app.trading_engine.market_data.provider import MarketDataProvider
 from app.agent.agents.backtest_analyst_agent import BacktestAnalystAgent
+import functools
+
+from app.agent.pipeline.portfolio_mutations import apply_portfolio_changes
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 _logger = logging.getLogger(__name__)
@@ -140,6 +143,7 @@ def _get_conversation_pipeline(
         investment_analyst_agent=InvestmentAnalystAgent(llm),
         performance_analyst_agent=PerformanceAnalystAgent(db),
         backtest_analyst_agent=BacktestAnalystAgent(db, market_data, translation_service),
+        apply_portfolio_changes=functools.partial(apply_portfolio_changes, db),
     )
 
 
