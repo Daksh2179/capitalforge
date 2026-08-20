@@ -12,6 +12,7 @@ from app.schemas.strategy import (
     PortfolioSnapshotResponse,
     StrategyCreateRequest,
     StrategyResponse,
+    StrategyState,
     StrategyVersionCreateRequest,
     StrategyVersionResponse,
 )
@@ -130,3 +131,40 @@ def get_current_version(
     if strategy is None or strategy.current_version is None:
         raise HTTPException(status_code=404, detail="No current version found")
     return StrategyVersionResponse.model_validate(strategy.current_version)
+
+@router.post("/{strategy_id}/pause", response_model=StrategyResponse)
+def pause_strategy(
+    strategy_id: uuid.UUID,
+    db: Session = Depends(get_db),
+) -> StrategyResponse:
+    strategy = strategy_service.get_strategy(db, strategy_id=strategy_id)
+    if strategy is None:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    if strategy.state != StrategyState.ACTIVE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot pause a strategy in state '{strategy.state.value}' -- only an active strategy can be paused",
+        )
+
+    strategy.state = StrategyState.PAUSED
+    db.commit()
+    return StrategyResponse.model_validate(strategy)
+
+
+@router.post("/{strategy_id}/resume", response_model=StrategyResponse)
+def resume_strategy(
+    strategy_id: uuid.UUID,
+    db: Session = Depends(get_db),
+) -> StrategyResponse:
+    strategy = strategy_service.get_strategy(db, strategy_id=strategy_id)
+    if strategy is None:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    if strategy.state != StrategyState.PAUSED:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot resume a strategy in state '{strategy.state.value}' -- only a paused strategy can be resumed",
+        )
+
+    strategy.state = StrategyState.ACTIVE
+    db.commit()
+    return StrategyResponse.model_validate(strategy)

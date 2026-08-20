@@ -11,6 +11,19 @@ freeing cash the same cycle's BUY plan can then use. Contains no
 trading decisions, no indicator math, no risk logic, and no planning
 logic itself -- only calls the components that do, in the right order.
 
+Smart pause: a PAUSED strategy still runs SELL/exit evaluation in
+full (existing positions stay protected by their stop loss/take
+profit/sell conditions) -- only the BUY side (Opportunity Engine
+planning and execution) is suspended. This is deliberate: a strategy
+that stops protecting open positions the moment it's paused would be
+the opposite of what "pause" should mean to a user. Buy conditions
+that would have triggered are still logged, honestly, with
+plan_outcome="skipped_paused" -- never silently dropped -- so
+resuming later doesn't leave a gap in what "why didn't you buy" can
+answer. "skipped_paused" is deliberately NOT a PlanOutcome enum
+member: that enum represents real planner outcomes, and a paused
+candidate never reaches the planner at all.
+
 MarketDataProvider -> Rule Evaluator -> [SELL: Risk Manager -> Broker]
                                       -> Opportunity Engine -> [BUY: Risk Manager -> Broker]
                                       -> Persistence
@@ -20,7 +33,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
-from app.models.strategy import Strategy, StrategyVersion
+from app.models.strategy import Strategy, StrategyState, StrategyVersion
 from app.schemas.strategy import AssetRule, PortfolioRules, StrategyConfig
 from app.services import trading_cycle_service
 from app.trading_engine.capital_allocation import resolve_requested_capital
@@ -89,14 +102,20 @@ def run_evaluation_cycle(
         bars_by_symbol=bars_by_symbol, risk_limits=risk_limits, broker=broker,
     )
 
-    portfolio = broker.get_portfolio()  # refreshed: SELL proceeds now available
-    opportunities = _build_opportunities(buy_candidates, bars_by_symbol, portfolio)
-    plan = build_execution_plan(opportunities, portfolio, bars_by_symbol, risk_limits)
+    if strategy.state == StrategyState.PAUSED:
+        _log_paused_buy_candidates(
+            db, strategy_version_id=strategy_version.id,
+            buy_candidates=buy_candidates, bars_by_symbol=bars_by_symbol,
+        )
+    else:
+        portfolio = broker.get_portfolio()  # refreshed: SELL proceeds now available
+        opportunities = _build_opportunities(buy_candidates, bars_by_symbol, portfolio)
+        plan = build_execution_plan(opportunities, portfolio, bars_by_symbol, risk_limits)
 
-    _execute_plan(
-        db, strategy_version_id=strategy_version.id, plan_entries=plan.entries,
-        bars_by_symbol=bars_by_symbol, risk_limits=risk_limits, broker=broker,
-    )
+        _execute_plan(
+            db, strategy_version_id=strategy_version.id, plan_entries=plan.entries,
+            bars_by_symbol=bars_by_symbol, risk_limits=risk_limits, broker=broker,
+        )
 
     final_portfolio = broker.get_portfolio()
     trading_cycle_service.record_portfolio_snapshot(
@@ -161,7 +180,10 @@ def _execute_sells(
     """SELLs are never ranked or contested for capital, so each one
     executes immediately, sequentially, against the real broker --
     there's no reason to wait for planning. plan_outcome is always
-    None: SELLs never reach the Opportunity Engine."""
+    None: SELLs never reach the Opportunity Engine. Deliberately runs
+    the same way regardless of whether the strategy is paused --
+    protecting existing positions is exactly what pause should NOT
+    suspend."""
     for rule, signal in sell_candidates:
         bars = bars_by_symbol[rule.symbol]
         portfolio = broker.get_portfolio()
@@ -179,6 +201,28 @@ def _execute_sells(
         trading_cycle_service.log_decision(
             db, strategy_version_id=strategy_version_id, latest_bar=bars[-1],
             signal=signal, risk_decision=risk_decision, plan_outcome=None,
+        )
+
+
+def _log_paused_buy_candidates(
+    db: Session, *, strategy_version_id, buy_candidates: list[tuple[AssetRule, Signal]],
+    bars_by_symbol: dict[str, list[MarketBar]],
+) -> None:
+    """Buy conditions still get evaluated and logged while paused --
+    never silently dropped -- but never reach the Opportunity Engine
+    at all. plan_outcome is the literal string "skipped_paused",
+    deliberately not a PlanOutcome enum member, since that enum
+    represents real planner outcomes and this candidate never reached
+    the planner. risk_approved is always False for the same reason
+    SKIPPED_LIQUIDITY/DEFERRED already use a synthetic RiskDecision:
+    the real Risk Manager never ran either."""
+    for rule, signal in buy_candidates:
+        bars = bars_by_symbol[rule.symbol]
+        trading_cycle_service.log_decision(
+            db, strategy_version_id=strategy_version_id, latest_bar=bars[-1],
+            signal=signal,
+            risk_decision=RiskDecision(approved=False, reason="Strategy is paused -- new buys are suspended."),
+            plan_outcome="skipped_paused",
         )
 
 

@@ -16,8 +16,8 @@ from app.trading_engine.domain.portfolio import Portfolio
 from app.trading_engine.domain.position import Position
 from app.trading_engine.execution.broker import Broker
 from app.trading_engine.market_data.provider import MarketDataProvider
-from app.models.strategy import StrategyVersionSource
 from app.workers.evaluation_job import run_evaluation_cycle
+from app.models.strategy import StrategyState, StrategyVersionSource
 
 ALWAYS_TRIGGERS_BUY = 999_999_999  # PRICE less_than this is always true
 NEVER_TRIGGERS_SELL = 999_999_999  # PRICE greater_than this is never true
@@ -333,3 +333,49 @@ def test_anticorrelated_candidate_preferred_over_correlated_one(db_session):
     assert safe_log.plan_outcome == "selected"
     assert safe_log.risk_approved is True
     assert tech2_log.plan_outcome == "deferred"
+    
+def test_paused_strategy_still_protects_existing_positions_but_skips_new_buys(db_session):
+    """AAPL is held at a real stop-loss trigger (exit evaluation must
+    still run while paused). NVDA would trigger a fresh BUY -- it must
+    be logged honestly (never silently dropped) but never actually
+    placed, since the strategy is paused."""
+    aapl_rule = _asset_rule(
+        "AAPL", buy_threshold=-1,  # AAPL is held, so evaluate_exit runs, not evaluate_strategy
+        capital={"type": "fixed_capital", "capital_usd": 1},
+    )
+    nvda_rule = _asset_rule(
+        "NVDA", buy_threshold=ALWAYS_TRIGGERS_BUY,
+        capital={"type": "fixed_capital", "capital_usd": 100},
+    )
+    strategy = _create_strategy(db_session, [aapl_rule, nvda_rule])
+    strategy.state = StrategyState.PAUSED
+    db_session.commit()
+
+    market_data = FakeMarketDataProvider({
+        "AAPL": _flat_bars("AAPL", price=50.0),  # well past the 3% stop loss from entry at 100.0
+        "NVDA": _flat_bars("NVDA", price=30.0),
+    })
+    broker = FakeBroker(
+        cash=1000.0,
+        positions={"AAPL": Position(symbol="AAPL", quantity=10, average_entry_price=100.0, current_price=50.0)},
+        prices={"AAPL": 50.0, "NVDA": 30.0},
+    )
+
+    run_evaluation_cycle(
+        db_session, strategy=strategy, strategy_version=strategy.current_version,
+        market_data=market_data, broker=broker,
+    )
+
+    sells = [o for o in broker.placed_orders if o.side == OrderSide.SELL]
+    buys = [o for o in broker.placed_orders if o.side == OrderSide.BUY]
+    assert len(sells) == 1 and sells[0].symbol == "AAPL"  # exit protection still ran
+    assert len(buys) == 0  # new buy suspended
+
+    logs = trading_cycle_service.list_decision_logs(db_session, strategy_version_id=strategy.current_version_id)
+    nvda_log = next(entry for entry in logs if entry.market_snapshot_json["symbol"] == "NVDA")
+    assert nvda_log.plan_outcome == "skipped_paused"  # logged honestly, never silently dropped
+    assert nvda_log.risk_approved is False
+
+    aapl_log = next(entry for entry in logs if entry.market_snapshot_json["symbol"] == "AAPL")
+    assert aapl_log.action_taken == "sell"
+    assert aapl_log.plan_outcome is None  # SELLs never reach the planner, paused or not
