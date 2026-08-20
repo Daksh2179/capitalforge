@@ -243,7 +243,7 @@ def test_strategy_editor_routes_to_the_same_strategy_builder_agent():
     assert result.plan.steps[0].status == ConversationStepStatus.EXECUTED
 
 
-def test_strategy_explainer_agent_executes_for_real_when_provided():
+def test_strategy_explainer_agent_executes_for_real_when_provided(db_session):
     from app.agent.agents.strategy_explainer_agent import StrategyExplainerAgent
     from app.agent.conversation_memory import ConversationEvent, EntityReference
     from datetime import datetime, timezone
@@ -252,7 +252,7 @@ def test_strategy_explainer_agent_executes_for_real_when_provided():
                           candidate_agents=["strategy_explainer"])
     goal_extractor = GoalExtractor(FakeGoalExtractionLLM(goal))
     directory = FakeAssetDirectory()
-    strategy_explainer = StrategyExplainerAgent()
+    strategy_explainer = StrategyExplainerAgent(db_session)
     translation_service = TranslationService(FakeTranslationLLM(IntentBatch(intents=[])), FakeMarketDataProvider(), directory)
     strategy_builder = StrategyBuilderAgent(translation_service)
 

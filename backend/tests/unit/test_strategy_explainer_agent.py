@@ -1,10 +1,12 @@
 """Unit tests for StrategyExplainerAgent."""
 
+import uuid
 from datetime import datetime, timezone
 
 from app.agent.agents.strategy_explainer_agent import StrategyExplainerAgent
 from app.agent.conversation_memory import ConversationEvent, ConversationMemory, EntityReference
-from app.agent.pipeline.types import AgentExecutionContext, GoalExtractionIntent, GroundedContext
+from app.agent.pipeline.types import AgentExecutionContext, DetailLevel, GoalExtractionIntent, GroundedContext
+from app.services import strategy_service
 
 
 def _resolved(symbol: str):
@@ -16,15 +18,15 @@ def _resolved(symbol: str):
     )
 
 
-def _context(resolved_entities, memory) -> AgentExecutionContext:
+def _context(resolved_entities, memory, raw_message="why did you set that?") -> AgentExecutionContext:
     grounded = GroundedContext(
         intent=GoalExtractionIntent.EXPLAIN, goal_relation=None, goal_summary=None,
-        resolved_entities=resolved_entities, raw_message="x",
+        resolved_entities=resolved_entities, raw_message=raw_message,
     )
     return AgentExecutionContext(grounded_context=grounded, memory=memory)
 
 
-def test_explains_a_defaulted_value_honestly():
+def test_explains_a_defaulted_value_honestly(db_session):
     memory = ConversationMemory(recent_events=[
         ConversationEvent(
             agent="strategy_builder", description="Added buy condition for AAPL",
@@ -33,13 +35,13 @@ def test_explains_a_defaulted_value_honestly():
             timestamp=datetime.now(timezone.utc),
         )
     ])
-    agent = StrategyExplainerAgent()
+    agent = StrategyExplainerAgent(db_session)
     results = agent.execute(_context([_resolved("AAPL")], memory))
 
     assert "defaulted to 5.0%" in results[0].facts[0]
 
 
-def test_explains_a_user_specified_value_honestly():
+def test_explains_a_user_specified_value_honestly(db_session):
     memory = ConversationMemory(recent_events=[
         ConversationEvent(
             agent="strategy_builder", description="Set AAPL buy condition RSI(14) < 30",
@@ -48,21 +50,98 @@ def test_explains_a_user_specified_value_honestly():
             timestamp=datetime.now(timezone.utc),
         )
     ])
-    agent = StrategyExplainerAgent()
+    agent = StrategyExplainerAgent(db_session)
     results = agent.execute(_context([_resolved("AAPL")], memory))
 
     assert "you specified that value directly" in results[0].facts[0]
 
 
-def test_no_matching_event_reports_honest_gap_not_a_guess():
-    agent = StrategyExplainerAgent()
+def test_no_matching_event_reports_honest_gap_not_a_guess(db_session):
+    agent = StrategyExplainerAgent(db_session)
     results = agent.execute(_context([_resolved("AAPL")], ConversationMemory()))
 
     assert "don't have a record" in results[0].facts[0]
 
 
-def test_nothing_resolved_reports_honest_gap():
-    agent = StrategyExplainerAgent()
-    results = agent.execute(_context([], ConversationMemory()))
+def test_nothing_resolved_reports_honest_gap(db_session):
+    agent = StrategyExplainerAgent(db_session)
+    results = agent.execute(_context([], ConversationMemory(), raw_message="why did you set that stop loss?"))
 
     assert "not sure which rule" in results[0].facts[0]
+
+
+def test_whole_strategy_explanation_narrates_rules_in_plain_english(db_session):
+    strategy = strategy_service.create_strategy(
+        db_session, user_id=uuid.uuid4(),
+        config_json={
+            "schema_version": 3,
+            "portfolio_rules": {"cash_reserve_pct": 10, "max_open_positions": 5},
+            "asset_rules": [{
+                "symbol": "AAPL",
+                "buy_conditions": {"operator": "AND", "rules": [{"indicator": "RSI", "period": 14, "operator": "less_than", "value": 30}]},
+                "sell_conditions": {"operator": "AND", "rules": [{"indicator": "PRICE", "period": 1, "operator": "greater_than", "value": 200}]},
+                "capital_allocation": {"type": "percentage_of_portfolio", "percentage": 10},
+                "exit": {"stop_loss_pct": 5},
+            }],
+        },
+        source="manual", confirmed_now=True,
+    )
+    db_session.refresh(strategy)
+
+    agent = StrategyExplainerAgent(db_session)
+    grounded = GroundedContext(
+        intent=GoalExtractionIntent.EXPLAIN, goal_relation=None, goal_summary=None,
+        raw_message="what is my strategy doing?",
+    )
+    context = AgentExecutionContext(grounded_context=grounded, memory=ConversationMemory(), strategy_id=strategy.id)
+
+    results = agent.execute(context)
+
+    facts_text = " ".join(results[0].facts)
+    assert "RSI(14) drops below 30" in facts_text
+    assert "10% of the portfolio" in facts_text
+    assert "stop loss at 5%" in facts_text
+    assert "keeps at least 10% of the portfolio in cash" in facts_text
+
+
+def test_whole_strategy_explanation_expanded_gives_more_detail(db_session):
+    strategy = strategy_service.create_strategy(
+        db_session, user_id=uuid.uuid4(),
+        config_json={
+            "schema_version": 3, "portfolio_rules": {},
+            "asset_rules": [{
+                "symbol": "AAPL",
+                "buy_conditions": {"operator": "AND", "rules": [{"indicator": "RSI", "period": 14, "operator": "less_than", "value": 30}]},
+                "sell_conditions": {"operator": "AND", "rules": [{"indicator": "PRICE", "period": 1, "operator": "greater_than", "value": 200}]},
+                "capital_allocation": {"type": "percentage_of_portfolio", "percentage": 10},
+                "exit": {},
+            }],
+        },
+        source="manual", confirmed_now=True,
+    )
+    db_session.refresh(strategy)
+
+    agent = StrategyExplainerAgent(db_session)
+    grounded = GroundedContext(
+        intent=GoalExtractionIntent.EXPLAIN, goal_relation=None, goal_summary=None,
+        raw_message="explain my strategy technically", detail_level=DetailLevel.EXPANDED,
+    )
+    context = AgentExecutionContext(grounded_context=grounded, memory=ConversationMemory(), strategy_id=strategy.id)
+
+    results = agent.execute(context)
+
+    assert "Buy condition (AND)" in results[0].facts[0]
+    assert "Sell condition (AND)" in results[0].facts[0]
+
+
+def test_whole_strategy_with_no_strategy_reports_honest_gap(db_session):
+    agent = StrategyExplainerAgent(db_session)
+    grounded = GroundedContext(
+        intent=GoalExtractionIntent.EXPLAIN, goal_relation=None, goal_summary=None,
+        raw_message="what is my robot doing?",
+    )
+    context = AgentExecutionContext(grounded_context=grounded, memory=ConversationMemory(), strategy_id=None)
+
+    results = agent.execute(context)
+
+    assert "don't have an active strategy" in results[0].facts[0]

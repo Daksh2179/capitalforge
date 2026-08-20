@@ -133,7 +133,7 @@ def _get_conversation_pipeline(
         market_research_agent=MarketResearchAgent(market_data),
         technical_analyst_agent=TechnicalAnalystAgent(market_data),
         educator_agent=EducatorAgent(),
-        strategy_explainer_agent=StrategyExplainerAgent(),
+        strategy_explainer_agent=StrategyExplainerAgent(db),
         portfolio_analyst_agent=PortfolioAnalystAgent(db),
         risk_advisor_agent=RiskAdvisorAgent(db, market_data),
         fundamental_analyst_agent=FundamentalAnalystAgent(finnhub_client),

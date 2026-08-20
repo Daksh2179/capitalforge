@@ -71,15 +71,12 @@ class StrategyBuilderAgent:
                 )
                 for op in result.applied_operations
             ]
-            
+
         if result.status == TranslationStatus.NEEDS_CLARIFICATION:
             message = result.clarification_message or "Could you clarify that?"
             return [CapabilityResult(
                 agent=self.name, description=message,
                 clarification=ClarificationRequest(question_text=message),
-                # about=None deliberately: TranslationResult doesn't expose
-                # which symbol (if any) a clarification concerns at this
-                # layer -- not guessed here.
             )]
 
         if result.status == TranslationStatus.NEEDS_DISAMBIGUATION:
