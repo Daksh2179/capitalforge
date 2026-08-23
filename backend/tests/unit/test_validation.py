@@ -148,4 +148,48 @@ def test_allocation_exceeding_max_allocation_pct_is_warning():
     matching = [i for i in issues if "max_allocation_pct limit" in i.message]
     assert len(matching) == 1
     assert matching[0].severity == Severity.WARNING
-    
+
+
+def test_fixed_capital_exceeding_pool_is_warning_not_error():
+    rule = _valid_asset_rule()
+    rule = rule.model_copy(update={"capital_allocation": CapitalAllocation(type="fixed_capital", capital_usd=1500)})
+    config = StrategyConfig(portfolio_rules=PortfolioRules(total_capital_usd=1000), asset_rules=[rule])
+
+    issues = validate_strategy(config)
+
+    matching = [i for i in issues if "trading pool" in i.message]
+    assert len(matching) == 1
+    assert matching[0].severity == Severity.WARNING
+    assert matching[0].symbol == "AAPL"
+    assert "$1,000" in matching[0].message
+    assert "$1,500" in matching[0].message
+
+
+def test_fixed_capital_within_pool_produces_no_warning():
+    rule = _valid_asset_rule()
+    rule = rule.model_copy(update={"capital_allocation": CapitalAllocation(type="fixed_capital", capital_usd=500)})
+    config = StrategyConfig(portfolio_rules=PortfolioRules(total_capital_usd=1000), asset_rules=[rule])
+
+    issues = validate_strategy(config)
+
+    assert not any("trading pool" in i.message for i in issues)
+
+
+def test_fixed_capital_exceeding_check_skipped_when_no_pool_declared():
+    rule = _valid_asset_rule()
+    rule = rule.model_copy(update={"capital_allocation": CapitalAllocation(type="fixed_capital", capital_usd=999999)})
+    config = StrategyConfig(portfolio_rules=PortfolioRules(), asset_rules=[rule])
+
+    issues = validate_strategy(config)
+
+    assert not any("trading pool" in i.message for i in issues)
+
+
+def test_percentage_of_portfolio_allocation_unaffected_by_pool_check():
+    # percentage_of_portfolio allocations aren't dollar figures, so
+    # they can never trigger the fixed-capital-exceeds-pool check.
+    config = StrategyConfig(
+        portfolio_rules=PortfolioRules(total_capital_usd=100), asset_rules=[_valid_asset_rule()]
+    )
+    issues = validate_strategy(config)
+    assert not any("trading pool" in i.message for i in issues)

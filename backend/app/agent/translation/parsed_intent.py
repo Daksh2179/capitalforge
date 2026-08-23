@@ -34,7 +34,9 @@ ConditionOperator = Literal[
     "crosses_above", "crosses_below", "pct_below", "pct_above",
 ]
 
-PortfolioRuleField = Literal["cash_reserve_pct", "max_allocation_pct", "max_open_positions"]
+PortfolioRuleField = Literal[
+    "cash_reserve_pct", "max_allocation_pct", "max_open_positions", "total_capital_usd"
+]
 
 
 class ParsedIntent(BaseModel):

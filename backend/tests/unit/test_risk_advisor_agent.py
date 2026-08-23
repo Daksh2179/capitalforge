@@ -116,3 +116,44 @@ def test_candidate_with_no_price_history_reports_honest_gap(db_session):
     results = agent.execute(_context(strategy.id, resolved_entities=[_resolved("NVDA")]))
 
     assert "don't have enough price history" in results[0].facts[0]
+    
+def test_portfolio_summary_percentages_use_declared_pool_not_real_value(db_session):
+    strategy = _create_strategy_with_snapshot(
+        db_session, cash=8000.0,
+        positions_json={"AAPL": {"quantity": 10, "average_entry_price": 100.0, "current_price": 100.0}},
+        portfolio_rules={"total_capital_usd": 2000.0},
+    )
+    agent = RiskAdvisorAgent(db_session, FakeMarketDataProvider({}))
+    results = agent.execute(_context(strategy.id))
+
+    # total_value = 8000 cash + 1000 AAPL = 9000. Against the real
+    # value, deployed would read ~11%. Against the declared $2,000 pool
+    # (effective_total = min(9000, 2000) = 2000), deployed reads 50%.
+    assert "50.0%" in results[0].facts[0]
+
+
+def test_summary_warns_when_deployed_exceeds_declared_pool(db_session):
+    strategy = _create_strategy_with_snapshot(
+        db_session, cash=200.0,
+        positions_json={"AAPL": {"quantity": 10, "average_entry_price": 100.0, "current_price": 180.0}},
+        portfolio_rules={"total_capital_usd": 1000.0},
+    )
+    agent = RiskAdvisorAgent(db_session, FakeMarketDataProvider({}))
+    results = agent.execute(_context(strategy.id))
+
+    facts_text = " ".join(results[0].facts)
+    assert "$1,800.00 deployed against a $1,000.00 declared pool" in facts_text
+    assert "no new buys will be approved" in facts_text
+
+
+def test_summary_omits_pool_warning_when_within_limit(db_session):
+    strategy = _create_strategy_with_snapshot(
+        db_session, cash=8000.0,
+        positions_json={"AAPL": {"quantity": 10, "average_entry_price": 100.0, "current_price": 100.0}},
+        portfolio_rules={"total_capital_usd": 5000.0},
+    )
+    agent = RiskAdvisorAgent(db_session, FakeMarketDataProvider({}))
+    results = agent.execute(_context(strategy.id))
+
+    facts_text = " ".join(results[0].facts)
+    assert "no new buys will be approved" not in facts_text

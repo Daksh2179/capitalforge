@@ -36,6 +36,13 @@ class IntentFragment:
     portfolio_rule_field: str | None = None
     max_open_positions: int | None = None
     clarification_context: str | None = None
+    # Raw dollar figure for a PORTFOLIO_RULE fragment whose field is
+    # "total_capital_usd" -- distinct from `capital_allocation` above,
+    # which is per-asset sizing (CAPITAL_ALLOCATION fragments only).
+    # A portfolio-wide dollar pool has no allocation "type" the way a
+    # per-asset CapitalAllocation does, so it gets its own plain field
+    # rather than being forced into that shape.
+    capital_usd: float | None = None
 
 
 _OPERATION_TO_KIND: dict[str, FragmentKind] = {
@@ -94,6 +101,7 @@ def translate_intent(intent: ParsedIntent) -> IntentFragment:
             portfolio_rule_field=intent.portfolio_rule_field,
             percentage_value=intent.percentage,
             max_open_positions=intent.max_open_positions,
+            capital_usd=intent.capital_usd,
         )
 
     # remove_asset, pause_strategy, resume_strategy: symbol/raw_text only
@@ -123,13 +131,6 @@ def _build_condition(intent: ParsedIntent) -> RuleCondition:
     indicator = intent.indicator
     operator = intent.operator
 
-    # PRICE compared against itself via price_above/price_below is not just
-    # nonsensical, it's a real bug: calculate_price returns the bar's own
-    # close, so price_above/price_below with indicator="PRICE" evaluates
-    # latest_close against itself and is always False. This is a lossless,
-    # deterministic correction (not a guess): "PRICE price_below X" and
-    # "PRICE less_than X" mean exactly the same thing, so normalize the
-    # operator rather than reject the intent outright.
     if indicator == "PRICE" and intent.compare_indicator is None:
         if operator == "price_below":
             operator = "less_than"

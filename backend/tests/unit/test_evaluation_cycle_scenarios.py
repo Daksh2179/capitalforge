@@ -379,3 +379,63 @@ def test_paused_strategy_still_protects_existing_positions_but_skips_new_buys(db
     aapl_log = next(entry for entry in logs if entry.market_snapshot_json["symbol"] == "AAPL")
     assert aapl_log.action_taken == "sell"
     assert aapl_log.plan_outcome is None  # SELLs never reach the planner, paused or not
+    
+def test_lowering_pool_below_current_exposure_blocks_new_buys_but_never_sells(db_session):
+    """A pool declared below what's already deployed must never force a
+    sell -- nothing in evaluate_risk's SELL branch even looks at
+    total_capital_usd, and this is intentional (see docs/decisions.md).
+    It should, however, block a fresh BUY via the existing
+    max_portfolio_deployment_pct check, now that effective_total_value
+    correctly caps sizing at the declared pool."""
+    aapl_rule = _asset_rule(
+        "AAPL", buy_threshold=-1,  # AAPL is held, so evaluate_exit runs, not evaluate_strategy
+        capital={"type": "fixed_capital", "capital_usd": 1},
+    )
+    nvda_rule = _asset_rule(
+        "NVDA", buy_threshold=ALWAYS_TRIGGERS_BUY,
+        capital={"type": "fixed_capital", "capital_usd": 100},
+    )
+    strategy = _create_strategy(
+        db_session, [aapl_rule, nvda_rule],
+        portfolio_rules={"cash_reserve_pct": None, "max_allocation_pct": None,
+                          "max_open_positions": None, "total_capital_usd": 500},
+    )
+
+    market_data = FakeMarketDataProvider({
+        # AAPL held flat at its entry price -- stop_loss_pct=3 never
+        # triggers, so nothing about this scenario should sell it.
+        "AAPL": _flat_bars("AAPL", price=100.0),
+        "NVDA": _flat_bars("NVDA", price=30.0),
+    })
+    broker = FakeBroker(
+        cash=2000.0,
+        # AAPL's existing position ($1,000) already exceeds the newly
+        # declared $500 pool before this cycle even runs.
+        positions={"AAPL": Position(symbol="AAPL", quantity=10, average_entry_price=100.0, current_price=100.0)},
+        prices={"AAPL": 100.0, "NVDA": 30.0},
+    )
+
+    run_evaluation_cycle(
+        db_session, strategy=strategy, strategy_version=strategy.current_version,
+        market_data=market_data, broker=broker,
+    )
+
+    sells = [o for o in broker.placed_orders if o.side == OrderSide.SELL]
+    buys = [o for o in broker.placed_orders if o.side == OrderSide.BUY]
+
+    # Never forces a sell -- AAPL's position is untouched.
+    assert len(sells) == 0
+    assert broker.portfolio.positions["AAPL"].quantity == 10
+
+    # Blocks the new buy -- no NVDA order, ever, while over the pool.
+    assert len(buys) == 0
+
+    logs = trading_cycle_service.list_decision_logs(db_session, strategy_version_id=strategy.current_version_id)
+    nvda_log = next(entry for entry in logs if entry.market_snapshot_json["symbol"] == "NVDA")
+    assert nvda_log.risk_approved is False
+
+    aapl_log = next(entry for entry in logs if entry.market_snapshot_json["symbol"] == "AAPL")
+    assert aapl_log.action_taken == "hold"  # exit conditions never triggered
+
+    # cash is untouched -- nothing executed at all this cycle
+    assert broker.portfolio.cash == 2000.0

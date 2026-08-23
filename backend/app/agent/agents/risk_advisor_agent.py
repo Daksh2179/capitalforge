@@ -133,8 +133,18 @@ class RiskAdvisorAgent:
                 facts=["The portfolio has no recorded value yet."],
             )
 
-        deployed_pct = portfolio.positions_value / total * 100
-        cash_pct = portfolio.cash / total * 100
+        # Consistent with what evaluate_risk actually enforces: every
+        # percentage here is taken against the declared pool when one
+        # exists, capped by the real account value, never the real
+        # total_value alone.
+        effective_total = (
+            min(total, risk_limits.total_capital_usd)
+            if risk_limits.total_capital_usd is not None
+            else total
+        )
+
+        deployed_pct = portfolio.positions_value / effective_total * 100
+        cash_pct = portfolio.cash / effective_total * 100
         facts = [
             f"Currently {deployed_pct:.1f}% deployed (limit: {risk_limits.max_portfolio_deployment_pct * 100:.0f}%), "
             f"{cash_pct:.1f}% in cash (minimum reserve: {risk_limits.min_cash_reserve_pct * 100:.0f}%)."
@@ -144,7 +154,7 @@ class RiskAdvisorAgent:
             largest_symbol, largest_position = max(
                 portfolio.positions.items(), key=lambda kv: kv[1].market_value or 0.0
             )
-            largest_pct = (largest_position.market_value or 0.0) / total * 100
+            largest_pct = (largest_position.market_value or 0.0) / effective_total * 100
             facts.append(
                 f"Largest single position is {largest_symbol} at {largest_pct:.1f}% of total value "
                 f"(single-position limit: {risk_limits.max_position_pct * 100:.0f}%)."
@@ -152,6 +162,14 @@ class RiskAdvisorAgent:
 
         if risk_limits.max_open_positions is not None:
             facts.append(f"Holding {len(portfolio.positions)} of a maximum {risk_limits.max_open_positions} positions.")
+
+        if risk_limits.total_capital_usd is not None and portfolio.positions_value > risk_limits.total_capital_usd:
+            facts.append(
+                f"You're at ${portfolio.positions_value:,.2f} deployed against a "
+                f"${risk_limits.total_capital_usd:,.2f} declared pool -- no new buys will be "
+                f"approved until this comes back under your limit, either through a "
+                f"rule-triggered exit or by raising your declared capital again."
+            )
 
         return CapabilityResult(agent=self.name, description="Summarized portfolio-wide risk", facts=facts)
 

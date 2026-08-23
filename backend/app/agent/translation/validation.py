@@ -34,6 +34,7 @@ def validate_strategy(config: StrategyConfig) -> list[ValidationIssue]:
         issues.extend(_check_buy_sell_price_contradiction(rule))
         issues.extend(_check_exit_percentage_sanity(rule))
     issues.extend(_check_allocation_over_commitment(config))
+    issues.extend(_check_fixed_capital_exceeds_pool(config))
 
     return issues
 
@@ -154,5 +155,31 @@ def _check_allocation_over_commitment(config: StrategyConfig) -> list[Validation
                 f"enforce this limit at trade time, but it's worth reconciling now."
             ),
         ))
+    return issues
 
+def _check_fixed_capital_exceeds_pool(config: StrategyConfig) -> list[ValidationIssue]:
+    """A compatibility WARNING, never an ERROR and never a silent
+    rewrite -- per docs/decisions.md, the declared pool and a rule's
+    fixed_capital request are allowed to be incompatible at confirm
+    time. The deterministic risk manager (effective_total_value in
+    evaluate_risk) remains the actual, final gate regardless of this
+    warning."""
+    pool = config.portfolio_rules.total_capital_usd
+    if pool is None:
+        return []
+
+    issues = []
+    for rule in config.asset_rules:
+        allocation = rule.capital_allocation
+        if allocation.type == "fixed_capital" and allocation.capital_usd is not None:
+            if allocation.capital_usd > pool:
+                issues.append(ValidationIssue(
+                    severity=Severity.WARNING, symbol=rule.symbol,
+                    message=(
+                        f"Your strategy's trading pool is ${pool:,.0f}, but this rule "
+                        f"requests ${allocation.capital_usd:,.0f} per trade. Risk controls "
+                        f"will prevent this trade from executing until the allocation is "
+                        f"compatible with your trading pool."
+                    ),
+                ))
     return issues

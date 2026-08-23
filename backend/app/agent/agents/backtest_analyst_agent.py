@@ -106,9 +106,10 @@ class BacktestAnalystAgent:
 
         end = datetime.now(timezone.utc)
         start = end - timedelta(days=_resolve_window_days(raw_message))
-        starting_cash, capital_label = self._resolve_starting_cash(context.strategy_id)
 
         current_config = self._load_confirmed_config(context.strategy_id) if context.strategy_id else None
+        starting_cash, capital_label = self._resolve_starting_cash(context.strategy_id, current_config)
+
         results: list[CapabilityResult] = []
 
         if current_config is not None and current_config.asset_rules:
@@ -157,7 +158,16 @@ class BacktestAnalystAgent:
         except Exception:
             return None
 
-    def _resolve_starting_cash(self, strategy_id) -> tuple[float, str]:
+    def _resolve_starting_cash(
+        self, strategy_id, current_config: StrategyConfig | None
+    ) -> tuple[float, str]:
+        """Priority: the strategy's own declared total_capital_usd pool
+        first (it's a deliberate statement of what this strategy is
+        allowed to manage, more relevant than the account's real total
+        balance for a backtest of THIS strategy), then the real
+        recorded account balance, then a labeled default."""
+        if current_config is not None and current_config.portfolio_rules.total_capital_usd is not None:
+            return current_config.portfolio_rules.total_capital_usd, "your strategy's declared trading pool"
         if strategy_id is not None:
             snapshots = trading_cycle_service.list_portfolio_snapshots(self._db, strategy_id=strategy_id, limit=1)
             if snapshots:

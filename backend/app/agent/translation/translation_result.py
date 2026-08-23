@@ -36,6 +36,12 @@ class AppliedOperation(BaseModel):
     symbol: str | None = None
     description: str
     reasoning: str | None = None
+    # Which PortfolioRules field this operation touched, when it was a
+    # set_portfolio_rule operation (None otherwise). Threaded from
+    # UpdateOutcome.field. Lets StrategyBuilderAgent attach field-
+    # specific conversational content (the total_capital_usd safety
+    # sentence) without matching on `description` text.
+    field: str | None = None
 
 class TranslationResult(BaseModel):
     model_config = ConfigDict(extra="forbid")

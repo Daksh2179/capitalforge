@@ -119,3 +119,16 @@ def test_capital_allocation_missing_allocation_type_raises():
     )
     with pytest.raises(ValueError, match="requires allocation_type"):
         translate_intent(intent)
+        
+def test_portfolio_rule_total_capital_usd_threads_capital_usd():
+    intent = ParsedIntent(
+        operation="set_portfolio_rule", intent_type="objective",
+        portfolio_rule_field="total_capital_usd", capital_usd=2000,
+        raw_text="set my trading capital to $2,000",
+    )
+    fragment = translate_intent(intent)
+
+    assert fragment.kind == FragmentKind.PORTFOLIO_RULE
+    assert fragment.portfolio_rule_field == "total_capital_usd"
+    assert fragment.capital_usd == 2000
+    assert fragment.percentage_value is None

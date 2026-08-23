@@ -202,3 +202,46 @@ def test_rule_created_via_explicit_capital_allocation_fragment_records_no_defaul
         ),
     )
     assert outcome.reasoning is None
+    
+def test_portfolio_rule_total_capital_usd_field_applies():
+    fragment = IntentFragment(
+        kind=FragmentKind.PORTFOLIO_RULE, symbol=None, raw_text="set my trading capital to $2,000",
+        portfolio_rule_field="total_capital_usd", capital_usd=2000,
+    )
+    outcome = apply_fragment(None, fragment)
+
+    assert outcome.config.portfolio_rules.total_capital_usd == 2000
+    assert outcome.field == "total_capital_usd"
+
+
+def test_portfolio_rule_total_capital_usd_description_shows_dollar_amount():
+    fragment = IntentFragment(
+        kind=FragmentKind.PORTFOLIO_RULE, symbol=None, raw_text="use $5k for this strategy",
+        portfolio_rule_field="total_capital_usd", capital_usd=5000,
+    )
+    outcome = apply_fragment(None, fragment)
+
+    assert "$5,000.00" in outcome.description
+
+
+def test_portfolio_rule_total_capital_usd_can_be_unset():
+    fragment = IntentFragment(
+        kind=FragmentKind.PORTFOLIO_RULE, symbol=None, raw_text="remove my trading pool limit",
+        portfolio_rule_field="total_capital_usd", capital_usd=None,
+    )
+    outcome = apply_fragment(None, fragment)
+
+    assert outcome.config.portfolio_rules.total_capital_usd is None
+    assert "unset" in outcome.description
+
+
+def test_portfolio_rule_outcome_records_which_field_changed():
+    # UpdateOutcome.field is threaded for every portfolio-rule branch,
+    # not just total_capital_usd -- StrategyBuilderAgent only acts on
+    # the total_capital_usd case, but the field itself is general.
+    fragment = IntentFragment(
+        kind=FragmentKind.PORTFOLIO_RULE, symbol=None, raw_text="keep 10% cash",
+        portfolio_rule_field="cash_reserve_pct", percentage_value=10,
+    )
+    outcome = apply_fragment(None, fragment)
+    assert outcome.field == "cash_reserve_pct"

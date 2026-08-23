@@ -10,6 +10,17 @@ reuse, not a coincidence: the planner should never have its own
 opinion about capital/position-count/cash-reserve feasibility that
 could drift from what this function actually enforces at execution
 time.
+
+effective_total_value: when a strategy declares a total_capital_usd
+trading pool, every percentage-based limit (sizing, max_position_pct,
+max_portfolio_deployment_pct, min_cash_reserve_pct) is computed against
+min(real_account_value, declared_pool), never against the real account
+value alone. This never touches the real Alpaca balance or
+portfolio.cash -- it only changes what the percentages in this
+function are taken relative to. The pre-existing total_capital_usd
+ceiling check below is kept as a dedicated, explicit safety net even
+though it becomes partially redundant once effective_total_value is
+used correctly -- never remove it.
 """
 
 from dataclasses import dataclass
@@ -56,6 +67,15 @@ def evaluate_risk(
     if total_value <= 0:
         return RiskDecision(approved=False, reason="portfolio has no value to deploy")
 
+    # Computed once, used everywhere a percentage-based limit needs a
+    # denominator. Falls back to the real total_value unchanged when no
+    # pool is declared.
+    effective_total_value = (
+        min(total_value, limits.total_capital_usd)
+        if limits.total_capital_usd is not None
+        else total_value
+    )
+
     if limits.max_open_positions is not None:
         already_holds_this_symbol = signal.symbol in portfolio.positions
         open_count = len(portfolio.positions)
@@ -68,13 +88,13 @@ def evaluate_risk(
                 ),
             )
 
-    requested_value = resolve_requested_capital(rule.capital_allocation, total_value, current_price)
+    requested_value = resolve_requested_capital(rule.capital_allocation, effective_total_value, current_price)
 
     existing_position = portfolio.positions.get(signal.symbol)
     existing_value = existing_position.market_value or 0.0 if existing_position else 0.0
 
     projected_position_value = existing_value + requested_value
-    max_position_value = total_value * limits.max_position_pct
+    max_position_value = effective_total_value * limits.max_position_pct
     if projected_position_value > max_position_value:
         return RiskDecision(
             approved=False,
@@ -85,7 +105,7 @@ def evaluate_risk(
         )
 
     projected_deployed_value = portfolio.positions_value + requested_value
-    max_deployed_value = total_value * limits.max_portfolio_deployment_pct
+    max_deployed_value = effective_total_value * limits.max_portfolio_deployment_pct
     if projected_deployed_value > max_deployed_value:
         return RiskDecision(
             approved=False,
@@ -96,7 +116,7 @@ def evaluate_risk(
         )
 
     remaining_cash_after = portfolio.cash - requested_value
-    min_cash_required = total_value * limits.min_cash_reserve_pct
+    min_cash_required = effective_total_value * limits.min_cash_reserve_pct
     if remaining_cash_after < min_cash_required:
         return RiskDecision(
             approved=False,

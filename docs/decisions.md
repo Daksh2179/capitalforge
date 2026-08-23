@@ -1065,3 +1065,75 @@ Still not live in api/agent.py.
   dedicated regression test that deliberately raises inside a faked
   `GoalExtractor` and confirms `response.status_code == 200` with a
   graceful `error` body.
+
+
+## Capital-pool semantics (total_capital_usd) -- implementation confirmed
+
+- **`effective_total_value = min(portfolio.total_value, limits.total_capital_usd)`**,
+  computed once at the top of `evaluate_risk` and used everywhere a
+  percentage-based limit needs a denominator: `resolve_requested_capital`,
+  `max_position_pct`, `max_portfolio_deployment_pct`, and
+  `min_cash_reserve_pct`. Falls back to the real `total_value` unchanged
+  when no pool is declared. `portfolio.cash` and `portfolio.positions_value`
+  themselves are never touched -- only what the percentages are taken
+  relative to changes.
+- **The pre-existing, dedicated `total_capital_usd` ceiling check is kept**,
+  even though `effective_total_value` makes it functionally unreachable
+  in ordinary configurations (whenever `max_portfolio_deployment_pct <=
+  1.0`, the deployment check's `max_deployed_value` is always `<=
+  total_capital_usd`, so it fires first with a more specific reason).
+  Retained as a defensive fallback for edge configurations, per the
+  original design intent -- not dead code to be cleaned up.
+- **Chat-based editing threads a raw dollar figure, not a `CapitalAllocation`.**
+  `IntentFragment.capital_usd` and `AppliedOperation.field` are new,
+  additive fields (same pattern as `reasoning`'s single-purpose
+  addition) -- `field` records which `PortfolioRules` field a
+  `set_portfolio_rule` fragment touched, letting `StrategyBuilderAgent`
+  attach field-specific conversational content without string-matching
+  `description`.
+- **The safety explanation rides in `CapabilityResult.limitations`**,
+  the existing disclosed-assumptions channel already rendered by
+  `ResponseComposer` for every turn (the same channel
+  `BacktestAnalystAgent` uses for its SIMULATION caveat) -- no new
+  contract field needed. Attached only when `AppliedOperation.field ==
+  "total_capital_usd"`.
+- **Correction to this doc's own original capital-pool spec**: the
+  safety sentence as actually shipped in `strategy_builder_agent.py`'s
+  `_TOTAL_CAPITAL_SAFETY_NOTE` is deliberately reworded from the
+  originally locked phrasing, and merges in the "never sells existing
+  positions" guarantee as part of the same sentence rather than a
+  separate one:
+
+  > "This doesn't change your real Alpaca balance -- it's how much of
+  > your account this strategy can use to trade. It won't sell
+  > anything you're already holding."
+
+  This is the actual, current locked wording going forward -- not the
+  original spec's phrasing. Any future change to this sentence should
+  update it here too, not just in the source file.
+- **`BacktestAnalystAgent._resolve_starting_cash` priority, in order**:
+  the strategy's own declared `total_capital_usd` pool, then the real
+  recorded `PortfolioSnapshot.total_value`, then the labeled default.
+  Required reordering `execute()` to load `current_config` before
+  resolving starting cash -- previously starting cash was resolved
+  first, before the config that would have informed it even existed.
+- **`RiskAdvisorAgent._summarize_portfolio_risk` uses the same
+  `effective_total_value` substitution as `evaluate_risk`**, so
+  reported percentages match what's actually enforced. Additionally
+  surfaces a plain-English warning, conditional on
+  `portfolio.positions_value > risk_limits.total_capital_usd`, naming
+  the two ways out (a rule-triggered exit, or raising the declared
+  pool) -- never shown when already within limit.
+- **Lowering the pool below current exposure required no new
+  enforcement code**, confirmed by an end-to-end scenario test
+  (`test_lowering_pool_below_current_exposure_blocks_new_buys_but_never_sells`):
+  nothing in `evaluate_risk`'s SELL branch reads `total_capital_usd` at
+  all, so an over-pool position is never force-sold; the existing
+  `max_portfolio_deployment_pct` check (now correctly scaled) blocks
+  further BUYs on its own.
+- **`validate_strategy` gained `_check_fixed_capital_exceeds_pool`**, a
+  WARNING-only check (never ERROR, never a silent rewrite) comparing
+  each `fixed_capital` `AssetRule.capital_allocation` against
+  `PortfolioRules.total_capital_usd`. `percentage_of_portfolio` and
+  `share_count` allocations are structurally exempt -- neither is a
+  literal dollar figure comparable to a dollar-denominated pool.

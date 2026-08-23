@@ -76,6 +76,16 @@ unspecified assets and state the inferred split back to the user, rather than \
 silently assuming or demanding an exact number for every asset. Produce a \
 set_capital_allocation intent per asset with the inferred capital_usd amounts.
 
+A strategy-wide trading pool (how much of the account a strategy is \
+allowed to use in total) is a DIFFERENT concept from a single asset's \
+capital_allocation above -- it applies to the whole strategy, not one \
+asset, and maps to a set_portfolio_rule intent, not set_capital_allocation. \
+Recognize phrasings like "set my trading capital to $2,000", "use $5k for \
+this strategy", "I only want this robot to trade with $1,500", or "cap my \
+strategy's capital at $10,000" as: operation="set_portfolio_rule", \
+portfolio_rule_field="total_capital_usd", capital_usd=<amount> (a raw \
+dollar figure, NOT percentage -- leave percentage unset for this field).
+
 Every instruction the user gives, even multiple in one message, should \
 produce its own intent. Always fill raw_text with the exact portion of the \
 user's message that intent corresponds to.

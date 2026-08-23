@@ -183,3 +183,47 @@ def test_no_strategy_no_benchmark_reports_honest_gap(db_session):
     results = agent.execute(_context())
 
     assert "don't have a confirmed strategy" in results[0].facts[0]
+    
+def _create_strategy_with_rule_and_pool(db_session, symbol="AAPL", total_capital_usd=3000.0):
+    strategy = strategy_service.create_strategy(
+        db_session, user_id=uuid.uuid4(),
+        config_json={
+            "schema_version": 3,
+            "portfolio_rules": {"total_capital_usd": total_capital_usd},
+            "asset_rules": [_rule(symbol).model_dump(mode="json")],
+        },
+        source="manual", confirmed_now=True,
+    )
+    db_session.refresh(strategy)
+    return strategy
+
+
+def test_declared_pool_preferred_over_real_account_balance(db_session):
+    strategy = _create_strategy_with_rule_and_pool(db_session, total_capital_usd=3000.0)
+    db_session.add(PortfolioSnapshot(
+        strategy_id=strategy.id, timestamp=datetime.now(timezone.utc),
+        cash_balance=5000.0, positions_json={}, total_value=5000.0,
+    ))
+    db_session.commit()
+
+    market_data = FakeMarketDataProvider({"AAPL": _bars("AAPL", [100.0 + i for i in range(30)])})
+    agent = BacktestAnalystAgent(db_session, market_data, FakeTranslationService(TranslationResult(status=TranslationStatus.ERROR)))
+
+    results = agent.execute(_context(strategy_id=strategy.id))
+
+    # The declared $3,000 pool wins over the real $5,000 recorded
+    # balance -- a backtest of THIS strategy should reflect what it's
+    # actually allowed to manage, not the account's full real value.
+    assert "$3,000.00" in results[0].limitations[0]
+    assert "declared trading pool" in results[0].limitations[0]
+
+
+def test_declared_pool_used_even_with_no_recorded_snapshot(db_session):
+    strategy = _create_strategy_with_rule_and_pool(db_session, total_capital_usd=1500.0)
+    market_data = FakeMarketDataProvider({"AAPL": _bars("AAPL", [100.0] * 30)})
+    agent = BacktestAnalystAgent(db_session, market_data, FakeTranslationService(TranslationResult(status=TranslationStatus.ERROR)))
+
+    results = agent.execute(_context(strategy_id=strategy.id))
+
+    assert "$1,500.00" in results[0].limitations[0]
+    assert "declared trading pool" in results[0].limitations[0]

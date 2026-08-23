@@ -25,6 +25,16 @@ from app.agent.translation.translation_result import TranslationResult, Translat
 from app.agent.translation.translation_service import TranslationService
 from app.schemas.strategy import StrategyConfig
 
+# Deliberately reworded from docs/decisions.md's original locked
+# phrasing for tone -- conveys the same two guarantees (doesn't touch
+# the real Alpaca balance; never sells existing positions) in one
+# sentence rather than two. Not verbatim; update docs/decisions.md's
+# capital-pool spec if this phrasing is meant to supersede it there.
+_TOTAL_CAPITAL_SAFETY_NOTE = (
+    "This doesn't change your real Alpaca balance -- it's how much of "
+    "your account this strategy can use to trade. It won't sell "
+    "anything you're already holding."
+)
 
 class StrategyBuilderAgent:
     name = AgentName.STRATEGY_BUILDER
@@ -60,14 +70,20 @@ class StrategyBuilderAgent:
                 CapabilityResult(
                     agent=self.name,
                     description=op.description,
-                    reasoning=op.reasoning,  # None unless draft_updater actually recorded a
-                                               # real system decision (currently: the capital-
-                                               # allocation default) -- never fabricated here.
+                    reasoning=op.reasoning,
                     draft_change=op,
                     affected_entities=(
                         [EntityReference(kind="symbol", value=op.symbol, display_name=op.symbol)]
                         if op.symbol else []
                     ),
+                    # The diff line itself (op.description) stays terse
+                    # ("Set total_capital_usd to $2,000.00"); the locked
+                    # safety sentence rides in `limitations`, the
+                    # existing disclosed-assumptions channel Response-
+                    # Composer already renders for every turn (same
+                    # channel BacktestAnalystAgent uses for its
+                    # SIMULATION caveat) -- no new contract needed.
+                    limitations=[_TOTAL_CAPITAL_SAFETY_NOTE] if op.field == "total_capital_usd" else [],
                 )
                 for op in result.applied_operations
             ]

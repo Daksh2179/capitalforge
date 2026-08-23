@@ -176,3 +176,35 @@ def test_default_allocation_reasoning_flows_through_to_capability_result():
 
     assert results[0].reasoning is not None
     assert "defaulted to 5.0%" in results[0].reasoning
+    
+def test_total_capital_usd_change_carries_locked_safety_sentence_in_limitations():
+    batch = IntentBatch(intents=[
+        ParsedIntent(
+            operation="set_portfolio_rule", intent_type="objective",
+            portfolio_rule_field="total_capital_usd", capital_usd=2000,
+            raw_text="set my trading capital to $2,000",
+        )
+    ])
+    results, _, raw = _agent(FakeLLMService(batch)).execute(
+        "set my trading capital to $2,000", [], None, None
+    )
+
+    assert raw.status == TranslationStatus.UPDATED_DRAFT
+    assert len(results) == 1
+    assert results[0].limitations == [
+        "This doesn't change your real Alpaca balance -- it's how much of "
+        "your account this strategy can use to trade. It won't sell "
+        "anything you're already holding."
+    ]
+
+def test_other_portfolio_rule_changes_carry_no_safety_sentence():
+    batch = IntentBatch(intents=[
+        ParsedIntent(
+            operation="set_portfolio_rule", intent_type="objective",
+            portfolio_rule_field="cash_reserve_pct", percentage=10,
+            raw_text="keep 10% cash",
+        )
+    ])
+    results, _, _ = _agent(FakeLLMService(batch)).execute("keep 10% cash", [], None, None)
+
+    assert results[0].limitations == []

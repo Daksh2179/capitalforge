@@ -39,6 +39,14 @@ class UpdateOutcome:
     config: StrategyConfig
     description: str
     reasoning: str | None = None
+    # Which PortfolioRules field this outcome changed, when the
+    # fragment was a PORTFOLIO_RULE (None otherwise). This lets a
+    # caller (StrategyBuilderAgent) attach field-specific conversational
+    # content -- e.g. the locked total_capital_usd safety sentence --
+    # without string-matching `description`, the same additive pattern
+    # `reasoning` already established for the capital-allocation
+    # default case.
+    field: str | None = None
 
 
 def apply_fragment(draft: StrategyConfig | None, fragment: IntentFragment) -> UpdateOutcome:
@@ -46,9 +54,6 @@ def apply_fragment(draft: StrategyConfig | None, fragment: IntentFragment) -> Up
         return _apply_portfolio_rule(draft, fragment)
 
     if fragment.kind in (FragmentKind.PAUSE_STRATEGY, FragmentKind.RESUME_STRATEGY):
-        # State transitions belong to Strategy.state (Group 6), not
-        # config_json. Nothing to change here; the service layer
-        # surfaces this as its own applied_operation without a draft change.
         current = draft or _empty_draft()
         return UpdateOutcome(config=current, description=f"{fragment.kind.value} acknowledged")
 
@@ -84,9 +89,6 @@ def _describe_allocation(allocation: CapitalAllocation) -> str:
 
 
 def _empty_asset_rule(symbol: str) -> AssetRule:
-    # id/created_at/updated_at all use AssetRule's own defaults here
-    # (a genuinely new rule's identity and creation time), so this
-    # function doesn't need to set them explicitly.
     return AssetRule(
         symbol=symbol,
         buy_conditions=ConditionGroup(operator="AND", rules=[]),
@@ -99,10 +101,6 @@ def _empty_asset_rule(symbol: str) -> AssetRule:
 
 
 def _get_or_create_asset_rule(draft: StrategyConfig | None, symbol: str) -> tuple[AssetRule, list[AssetRule], bool]:
-    """Third return value: True only when this call actually created
-    a brand-new rule (as opposed to returning an existing one) --
-    the one signal _apply_asset_fragment needs to know whether the
-    capital_allocation default is about to fire."""
     other_rules = [r for r in draft.asset_rules if r.symbol != symbol] if draft else []
     existing = next((r for r in draft.asset_rules if r.symbol == symbol), None) if draft else None
     if existing is not None:
@@ -110,14 +108,6 @@ def _get_or_create_asset_rule(draft: StrategyConfig | None, symbol: str) -> tupl
     return _empty_asset_rule(symbol), other_rules, True 
 
 def _merge_condition(existing_rules: list, new_condition) -> list:
-    """Replace an existing condition targeting the same
-    (indicator, operator, compare_indicator) combination, or append as
-    a new condition if no match exists. This is what makes "update
-    Apple's buy price to $175" correctly replace the old price
-    threshold instead of accumulating a second, conflicting condition,
-    while still allowing genuinely different conditions (different
-    indicator or operator) to compose together via AND/OR.
-    """
     key = (new_condition.indicator, new_condition.operator, new_condition.compare_indicator)
     replaced = False
     updated = []
@@ -136,13 +126,6 @@ def _apply_asset_fragment(draft: StrategyConfig | None, symbol: str, fragment: I
     rule, other_rules, was_created = _get_or_create_asset_rule(draft, symbol)
     portfolio_rules = draft.portfolio_rules if draft else PortfolioRules()
 
-    # A brand-new rule created by anything OTHER than an explicit
-    # capital-allocation fragment silently used the 5% default --
-    # this is a real system decision, not a user-specified value, and
-    # StrategyExplainerAgent needs it recorded to answer honestly.
-    # If a CAPITAL_ALLOCATION fragment happens to be what created the
-    # rule (fragment order within one turn isn't guaranteed), no
-    # default fired at all, so no reasoning is attached.
     reasoning: str | None = None
     if was_created and fragment.kind != FragmentKind.CAPITAL_ALLOCATION:
         reasoning = (
@@ -214,8 +197,21 @@ def _apply_portfolio_rule(draft: StrategyConfig | None, fragment: IntentFragment
 
     if field == "max_open_positions":
         updated = current.portfolio_rules.model_copy(update={"max_open_positions": fragment.max_open_positions})
+        value_desc = str(fragment.max_open_positions)
+    elif field == "total_capital_usd":
+        # A raw dollar figure, not a percentage -- fragment.capital_usd,
+        # not fragment.percentage_value. May legitimately be None (e.g.
+        # "remove my trading pool limit"), which correctly clears the
+        # field back to "use my whole real account value."
+        updated = current.portfolio_rules.model_copy(update={"total_capital_usd": fragment.capital_usd})
+        value_desc = f"${fragment.capital_usd:,.2f}" if fragment.capital_usd is not None else "unset (uses full account value)"
     else:
         updated = current.portfolio_rules.model_copy(update={field: fragment.percentage_value})
+        value_desc = str(fragment.percentage_value)
 
     new_config = StrategyConfig(portfolio_rules=updated, asset_rules=current.asset_rules)
-    return UpdateOutcome(config=new_config, description=f"Set {field} to {fragment.percentage_value or fragment.max_open_positions}")
+    return UpdateOutcome(
+        config=new_config,
+        description=f"Set {field} to {value_desc}",
+        field=field,
+    )
