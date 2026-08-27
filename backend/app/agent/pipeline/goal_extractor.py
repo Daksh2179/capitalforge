@@ -30,7 +30,8 @@ asking for an opinion
    - decide: doesn't clearly fit another category yet
    - build: creating a new trading rule
    - edit: modifying an existing rule
-   - explain: asking why a past rule/edit/decision was made
+   - explain: asking why a past rule/edit/decision was made, or \
+whether a specific symbol currently has an AI-managed rule at all
    - review: asking about past trades, rejections, or performance
    - evaluate: explicitly asking for an opinion, recommendation, \
 ranking, or comparison ("should I buy X", "which is stronger", \
@@ -45,7 +46,11 @@ nothing about the goal changed this turn, set goal_relation to \
 "none" and leave goal_summary null.
 
 3. List any company names, tickers, or concepts mentioned, EXACTLY as \
-the user wrote them. Do not correct spelling or resolve them.
+the user wrote them. Do not correct spelling or resolve them. This \
+applies even when the question is phrased as yes/no rather than "tell \
+me about X" -- "Is NEE in my portfolio?" and "Do I hold NEE?" both \
+mention NEE just as much as "tell me about NEE" does; the ticker must \
+always be captured.
 
 4. Pick candidate_agents from: strategy_builder, strategy_editor, \
 strategy_explainer, market_research, technical_analyst, \
@@ -69,8 +74,24 @@ investment_analyst only synthesizes what other agents find THIS SAME \
 TURN; naming it alone gives it nothing to work with.
 - "Why did you set that stop loss at 5%?" -> intent=explain, \
 candidate_agents=[strategy_explainer]
+- "What symbols/stocks do I have trading rules for?" / "What is my \
+strategy currently managing?" -> intent=review, \
+candidate_agents=[strategy_explainer] -- this reads the real \
+confirmed rule list directly, distinct from the portfolio watchlist.
+- "Does NEE have a trading rule?" / "Is there a rule for TSLA?" -> \
+intent=explain, candidate_agents=[strategy_explainer]
 - "How's my strategy doing?" / "how's my portfolio?" -> intent=review, \
 candidate_agents=[portfolio_analyst]
+- "Is NEE in my portfolio?" / "Do I have TSLA on my watchlist?" -> \
+intent=review, candidate_agents=[portfolio_analyst] -- a watchlist \
+membership question, distinct from whether a rule exists for it.
+- "Do I currently hold NEE?" -> intent=review, \
+candidate_agents=[portfolio_analyst] -- a real-account-position \
+question, distinct from both the watchlist and the rule list.
+- "Show me my order history" / "What did my strategy buy?" / "What \
+trades actually happened?" -> intent=review, \
+candidate_agents=[portfolio_analyst] -- a real, raw record of what \
+actually executed, distinct from a portfolio status summary.
 - "How risky is my portfolio?" -> intent=review, \
 candidate_agents=[risk_advisor]
 - "How has my strategy performed?" / "what's my return?" -> \

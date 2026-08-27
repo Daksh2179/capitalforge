@@ -1,21 +1,29 @@
 """StrategyExplainerAgent: answers "why" questions about past edits,
-and now also narrates the WHOLE current strategy in plain English on
-request ("what is my strategy doing", "explain my robot").
+whether a symbol currently has a rule at all, and now also narrates
+the WHOLE current strategy in plain English on request ("what is my
+strategy doing", "explain my robot", "what symbols do I have trading
+rules for").
 
 These are genuinely different questions needing different data: the
 per-edit "why" reads ConversationMemory.recent_events (conversational
-history); the whole-strategy narration reads the CONFIRMED strategy's
-real config (persisted state), which is why this Agent now needs a
-database Session -- it never did before.
+history); the whole-strategy narration and the rule-existence check
+both read the CONFIRMED strategy's real config.asset_rules directly
+(persisted state) -- this is deliberate: a symbol can have a real,
+confirmed AssetRule without ever being a PortfolioHolding row (the NEM
+case), so reading asset_rules directly, rather than inferring rule
+membership from the staging portfolio, is what makes that symbol
+visible here with no special-casing.
 
-Distinguishing the two: Grounding's implicit-reference fallback means
-resolved_entities is often populated (via memory.primary_focus) even
-on a genuinely whole-strategy question like "what is my strategy
-doing" asked right after discussing AAPL -- resolved_entities alone
-can't tell the two apart. A small, explicit, local marker check on the
-raw message ("my strategy", "my robot", etc.) resolves the ambiguity,
-same discipline as DetailLevel's own lexical markers -- a documented,
-narrow V1 choice, not a general NLU distinction.
+Distinguishing the three question shapes: Grounding's implicit-
+reference fallback means resolved_entities is often populated (via
+memory.primary_focus) even on a genuinely whole-strategy question
+("what is my strategy doing" asked right after discussing AAPL) --
+resolved_entities alone can't tell the three apart. Small, explicit,
+local marker checks on the raw message resolve this, same discipline
+as DetailLevel's own lexical markers -- documented, narrow V1 choices,
+checked in a fixed order (whole-strategy, then rule-existence, then
+falling through to the existing per-edit logic) so each gate is
+independently safe to extend without disturbing the others.
 
 V1 scope for the per-edit "why" is honest about what the system
 actually knows: if a past edit's ConversationEvent has real reasoning
@@ -31,14 +39,26 @@ Reads Memory read-only via AgentExecutionContext; never writes it.
 from sqlalchemy.orm import Session
 
 from app.agent.agent_contracts import AgentName, CapabilityResult
-from app.agent.pipeline.types import AgentExecutionContext, DetailLevel
+from app.agent.pipeline.types import AgentExecutionContext, DetailLevel, ResolvedEntity
 from app.schemas.strategy import AssetRule, CapitalAllocation, ConditionGroup, ExitRules, RuleCondition, StrategyConfig
 from app.services import strategy_service
 
 _WHOLE_STRATEGY_MARKERS = [
     "my strategy", "my robot", "my rules", "my setup", "my agent",
     "what is it doing", "what does it do", "explain everything",
+    # Widened for "what symbols/rules do I have" style listing
+    # questions -- these don't contain "my strategy"/"my rules"
+    # verbatim, but want the exact same whole-strategy narration.
+    "trading rules", "currently managing", "what symbols",
 ]
+
+# Independent verb-word-list / noun-word-list check, same discipline
+# as PortfolioAnalystAgent's _wants_portfolio_add/_wants_portfolio_remove
+# -- an exact phrase like "have a rule" breaks the moment a real
+# question inserts a word ("have a TRADING rule"), which fixed-phrase
+# matching found the hard way.
+_RULE_EXISTENCE_HAVE_WORDS = ["have", "has", "is there"]
+_RULE_EXISTENCE_RULE_WORDS = ["rule"]
 
 _OPERATOR_WORDS = {
     "less_than": "drops below", "greater_than": "rises above",
@@ -51,6 +71,13 @@ _OPERATOR_WORDS = {
 def _wants_whole_strategy_explanation(raw_message: str) -> bool:
     lowered = raw_message.lower()
     return any(marker in lowered for marker in _WHOLE_STRATEGY_MARKERS)
+
+def _wants_rule_existence_check(raw_message: str) -> bool:
+    lowered = raw_message.lower()
+    return (
+        any(word in lowered for word in _RULE_EXISTENCE_HAVE_WORDS)
+        and any(word in lowered for word in _RULE_EXISTENCE_RULE_WORDS)
+    )
 
 
 def _describe_indicator(indicator: str, period: int) -> str:
@@ -137,6 +164,9 @@ class StrategyExplainerAgent:
                 facts=["I'm not sure which rule you're asking about."],
             )]
 
+        if _wants_rule_existence_check(grounded.raw_message):
+            return [self._explain_rule_existence(context, resolved) for resolved in grounded.resolved_entities]
+
         results: list[CapabilityResult] = []
         for resolved in grounded.resolved_entities:
             symbol = resolved.entity.value
@@ -163,6 +193,30 @@ class StrategyExplainerAgent:
                 facts=[fact], affected_entities=[resolved.entity],
             ))
         return results
+
+    def _explain_rule_existence(self, context: AgentExecutionContext, resolved: ResolvedEntity) -> CapabilityResult:
+        symbol = resolved.entity.value
+        has_rule = self._symbol_has_rule(context, symbol)
+        fact = (
+            f"{symbol} currently has an AI-managed rule." if has_rule
+            else f"{symbol} doesn't currently have an AI-managed rule."
+        )
+        return CapabilityResult(
+            agent=self.name, description=f"Checked whether {symbol} has a rule",
+            facts=[fact], affected_entities=[resolved.entity],
+        )
+
+    def _symbol_has_rule(self, context: AgentExecutionContext, symbol: str) -> bool:
+        if context.strategy_id is None:
+            return False
+        strategy = strategy_service.get_strategy(self._db, strategy_id=context.strategy_id)
+        if strategy is None or strategy.current_version is None:
+            return False
+        try:
+            config = StrategyConfig.model_validate(strategy.current_version.config_json)
+        except Exception:
+            return False
+        return any(rule.symbol == symbol for rule in config.asset_rules)
 
     def _explain_whole_strategy(self, context: AgentExecutionContext) -> CapabilityResult:
         if context.strategy_id is None:

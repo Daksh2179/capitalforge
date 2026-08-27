@@ -145,3 +145,122 @@ def test_whole_strategy_with_no_strategy_reports_honest_gap(db_session):
     results = agent.execute(context)
 
     assert "don't have an active strategy" in results[0].facts[0]
+    
+def _strategy_with_rules(db_session, symbols):
+    # Complete, schema-valid AssetRule dicts -- _symbol_has_rule
+    # validates the whole StrategyConfig via Pydantic, which requires
+    # every AssetRule field to be present. Real, production-persisted
+    # configs always have this (they went through validation before
+    # being saved); a bare {"symbol": s} only ever happens in an
+    # under-built test fixture, which is exactly what broke here.
+    strategy = strategy_service.create_strategy(
+        db_session, user_id=uuid.uuid4(),
+        config_json={
+            "schema_version": 3, "portfolio_rules": {},
+            "asset_rules": [
+                {
+                    "symbol": s,
+                    "buy_conditions": {"operator": "AND", "rules": []},
+                    "sell_conditions": {"operator": "AND", "rules": []},
+                    "capital_allocation": {"type": "percentage_of_portfolio", "percentage": 5},
+                    "exit": {},
+                }
+                for s in symbols
+            ],
+        },
+        source="manual", confirmed_now=True,
+    )
+    db_session.refresh(strategy)
+    return strategy
+
+
+def test_widened_markers_route_rule_listing_question_to_whole_strategy(db_session):
+    strategy = strategy_service.create_strategy(
+        db_session, user_id=uuid.uuid4(),
+        config_json={
+            "schema_version": 3, "portfolio_rules": {},
+            "asset_rules": [{
+                "symbol": "AAPL",
+                "buy_conditions": {"operator": "AND", "rules": [{"indicator": "RSI", "period": 14, "operator": "less_than", "value": 30}]},
+                "sell_conditions": {"operator": "AND", "rules": []},
+                "capital_allocation": {"type": "percentage_of_portfolio", "percentage": 5},
+                "exit": {},
+            }],
+        },
+        source="manual", confirmed_now=True,
+    )
+    db_session.refresh(strategy)
+
+    agent = StrategyExplainerAgent(db_session)
+    grounded = GroundedContext(
+        intent=GoalExtractionIntent.REVIEW, goal_relation=None, goal_summary=None,
+        raw_message="What symbols do I have trading rules for?",
+    )
+    context = AgentExecutionContext(grounded_context=grounded, memory=ConversationMemory(), strategy_id=strategy.id)
+
+    results = agent.execute(context)
+
+    assert "AAPL" in results[0].facts[0]
+    assert results[0].description == "Explained the whole strategy"
+
+
+def test_rule_existence_check_true_when_symbol_has_a_rule(db_session):
+    strategy = _strategy_with_rules(db_session, ["AAPL"])
+    agent = StrategyExplainerAgent(db_session)
+    grounded = GroundedContext(
+        intent=GoalExtractionIntent.EXPLAIN, goal_relation=None, goal_summary=None,
+        resolved_entities=[_resolved("AAPL")], raw_message="Does AAPL have a rule?",
+    )
+    context = AgentExecutionContext(grounded_context=grounded, memory=ConversationMemory(), strategy_id=strategy.id)
+    results = agent.execute(context)
+
+    assert results[0].facts[0] == "AAPL currently has an AI-managed rule."
+
+
+def test_rule_existence_check_false_when_symbol_has_no_rule(db_session):
+    strategy = _strategy_with_rules(db_session, ["AAPL"])
+    agent = StrategyExplainerAgent(db_session)
+    grounded = GroundedContext(
+        intent=GoalExtractionIntent.EXPLAIN, goal_relation=None, goal_summary=None,
+        resolved_entities=[_resolved("NEE")], raw_message="Does NEE have a trading rule?",
+    )
+    context = AgentExecutionContext(grounded_context=grounded, memory=ConversationMemory(), strategy_id=strategy.id)
+    results = agent.execute(context)
+
+    assert results[0].facts[0] == "NEE doesn't currently have an AI-managed rule."
+
+
+def test_rule_existence_check_ignores_memory_primary_focus(db_session):
+    """An explicitly resolved NEE must be answered about directly, even
+    with memory.primary_focus pointing at GOOGL from an earlier turn."""
+    strategy = _strategy_with_rules(db_session, ["GOOGL"])
+    memory = ConversationMemory(primary_focus=EntityReference(kind="symbol", value="GOOGL", display_name="Alphabet (GOOGL)"))
+
+    agent = StrategyExplainerAgent(db_session)
+    grounded = GroundedContext(
+        intent=GoalExtractionIntent.EXPLAIN, goal_relation=None, goal_summary=None,
+        resolved_entities=[_resolved("NEE")], raw_message="Does NEE have a rule?",
+    )
+    context = AgentExecutionContext(grounded_context=grounded, memory=memory, strategy_id=strategy.id)
+    results = agent.execute(context)
+
+    assert "NEE" in results[0].facts[0]
+    assert "GOOGL" not in results[0].facts[0]
+
+
+def test_per_edit_why_questions_are_unaffected_by_rule_existence_check(db_session):
+    """Regression guard: a plain 'why did you set that' question with
+    no rule-existence marker must still hit the original per-edit
+    logic, not the new branch."""
+    memory = ConversationMemory(recent_events=[
+        ConversationEvent(
+            agent="strategy_builder", description="Set AAPL buy condition RSI(14) < 30",
+            reasoning=None,
+            related_entities=[EntityReference(kind="symbol", value="AAPL", display_name="Apple (AAPL)")],
+            timestamp=datetime.now(timezone.utc),
+        )
+    ])
+    agent = StrategyExplainerAgent(db_session)
+    results = agent.execute(_context([_resolved("AAPL")], memory))
+
+    assert "you specified that value directly" in results[0].facts[0]

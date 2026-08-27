@@ -6,6 +6,41 @@ portfolio-in-progress, via the narrow PortfolioChange contract.
 Watchlist is checked FIRST and ALWAYS, regardless of whether an active
 strategy exists.
 
+Three genuinely different real-world facts this Agent must never
+conflate, per docs/decisions.md's three-source model:
+1. PortfolioHolding (the staging watchlist) -- "I intend to manage this."
+2. AssetRule membership (is_symbol_ai_configured) -- "CapitalForge has
+   a confirmed automated rule for this," checked INDEPENDENTLY of
+   watchlist membership. A symbol can have a real AssetRule with no
+   corresponding PortfolioHolding row at all (e.g. a rule created
+   directly through chat without ever being added to the staging
+   list) -- previously this check only ran when the symbol was ALSO
+   on the watchlist, making such a symbol's rule status invisible no
+   matter what was asked. Fixed here: checked unconditionally.
+3. Real Alpaca-backed state (held_position, via the real latest
+   PortfolioSnapshot) -- "this actually exists in the account," true
+   or false regardless of whether a rule or watchlist entry exists for
+   it. A real position can exist with neither (see docs/decisions.md's
+   GOOGL-under-an-old-strategy-version investigation).
+
+held_position is now stated as an explicit fact whenever it's True (a
+real, always-worth-surfacing positive), or as a supplementary note
+when there's already other context established about the symbol.
+Deliberately NOT surfaced as the SOLE fact for a symbol we otherwise
+know nothing about -- that case keeps the single, honest "I don't have
+any information" fallback, rather than leading with a possibly
+uninformative negative.
+
+Order history is a genuinely distinct question from "how's my
+portfolio doing" -- a raw factual event list, not a current-state
+summary or a computed metric -- but it belongs here rather than a new
+Agent: this Agent already owns "everything about the real account and
+its real activity" (this docstring has claimed Order history as in
+scope from the start; it just was never implemented). Detected via the
+same small, explicit, local lexical-marker discipline already used for
+add/remove below -- checked BEFORE resolved-entity dispatch, since an
+order-history request may or may not mention a specific symbol.
+
 Add/remove detection is a small, explicit, local lexical check (same
 discipline as DetailLevel's own markers) -- verb + portfolio-noun,
 checked independently so the symbol sitting between them doesn't break
@@ -53,12 +88,18 @@ from app.agent.agent_contracts import (
 from app.agent.conversation_memory import EntityReference
 from app.agent.pipeline.types import AgentExecutionContext, ResolvedEntity
 from app.services import portfolio_service, strategy_service, trading_cycle_service
+from app.trading_engine.domain.order import OrderStatus
 
 _RECENT_LOOKBACK = 50
 
 _ADD_VERBS = ["add", "start tracking", "put"]
 _REMOVE_VERBS = ["remove", "stop tracking", "take off", "delete"]
 _PORTFOLIO_NOUNS = ["portfolio", "watchlist", "list", "setup"]
+
+_ORDER_HISTORY_MARKERS = [
+    "order history", "my orders", "what did i buy", "what did my strategy buy",
+    "what trades", "trade history", "what has it bought", "what has it sold",
+]
 
 
 def _wants_portfolio_add(raw_message: str) -> bool:
@@ -69,6 +110,11 @@ def _wants_portfolio_add(raw_message: str) -> bool:
 def _wants_portfolio_remove(raw_message: str) -> bool:
     lowered = raw_message.lower()
     return any(verb in lowered for verb in _REMOVE_VERBS) and any(noun in lowered for noun in _PORTFOLIO_NOUNS)
+
+
+def _wants_order_history(raw_message: str) -> bool:
+    lowered = raw_message.lower()
+    return any(marker in lowered for marker in _ORDER_HISTORY_MARKERS)
 
 
 class PortfolioAnalystAgent:
@@ -84,6 +130,9 @@ class PortfolioAnalystAgent:
             if context.user_id is not None else []
         )
 
+        if _wants_order_history(grounded.raw_message):
+            return [self._order_history(context, grounded.resolved_entities)]
+
         if grounded.resolved_entities:
             results: list[CapabilityResult] = []
             for resolved in grounded.resolved_entities:
@@ -95,6 +144,55 @@ class PortfolioAnalystAgent:
             return results
 
         return [self._summarize(context, watchlist)]
+
+    def _order_history(self, context: AgentExecutionContext, resolved_entities: list[ResolvedEntity]) -> CapabilityResult:
+        if context.strategy_id is None:
+            return CapabilityResult(
+                agent=self.name, description="No active strategy to report order history for",
+                facts=["I don't have an active strategy to look at right now."],
+            )
+
+        strategy = strategy_service.get_strategy(self._db, strategy_id=context.strategy_id)
+        if strategy is None or strategy.current_version_id is None:
+            return CapabilityResult(
+                agent=self.name, description="No confirmed strategy version found",
+                facts=["I don't have a confirmed strategy to report order history for."],
+            )
+
+        orders = trading_cycle_service.list_orders(
+            self._db, strategy_version_id=strategy.current_version_id, limit=_RECENT_LOOKBACK
+        )
+
+        entities = [r.entity for r in resolved_entities]
+        if resolved_entities:
+            wanted_symbols = {r.entity.value for r in resolved_entities}
+            orders = [o for o in orders if o.symbol in wanted_symbols]
+
+        if not orders:
+            scope = f" for {', '.join(sorted({e.value for e in entities}))}" if entities else ""
+            return CapabilityResult(
+                agent=self.name, description="No orders recorded",
+                facts=[f"I don't have any recorded orders{scope} yet."],
+                affected_entities=entities,
+            )
+
+        facts = []
+        for order in orders:
+            if order.status == OrderStatus.FILLED and order.filled_avg_price is not None and order.filled_at is not None:
+                facts.append(
+                    f"{order.side.value.capitalize()} {order.symbol}: {order.filled_quantity:g} shares "
+                    f"at ${order.filled_avg_price:.2f} (filled {order.filled_at.strftime('%Y-%m-%d')})."
+                )
+            else:
+                facts.append(
+                    f"{order.side.value.capitalize()} {order.symbol}: {order.quantity:g} shares requested, "
+                    f"status: {order.status.value}."
+                )
+
+        return CapabilityResult(
+            agent=self.name, description="Reported order history",
+            facts=facts, affected_entities=entities,
+        )
 
     def _handle_add_remove(self, context: AgentExecutionContext, resolved: ResolvedEntity) -> CapabilityResult | None:
         symbol = resolved.entity.value
@@ -161,14 +259,22 @@ class PortfolioAnalystAgent:
     ) -> CapabilityResult:
         facts: list[str] = []
         on_watchlist = any(h.symbol == symbol for h in watchlist)
+        configured = (
+            portfolio_service.is_symbol_ai_configured(self._db, user_id=context.user_id, symbol=symbol)
+            if context.user_id is not None else False
+        )
 
-        if on_watchlist and context.user_id is not None:
-            configured = portfolio_service.is_symbol_ai_configured(self._db, user_id=context.user_id, symbol=symbol)
+        # Rule-configuration status checked unconditionally, not just
+        # when the symbol is also on the watchlist -- see module
+        # docstring, source #2.
+        if on_watchlist:
             facts.append(
                 f"{symbol} is on your watchlist and already has an AI-managed rule."
                 if configured else
                 f"{symbol} is on your watchlist but doesn't have an AI-managed rule yet."
             )
+        elif configured:
+            facts.append(f"{symbol} isn't on your portfolio watchlist, but it does have an AI-managed rule.")
 
         held_position: bool | None = None
         if context.strategy_id is not None:
@@ -195,12 +301,15 @@ class PortfolioAnalystAgent:
                             f"{len(symbol_logs)} evaluation(s) I have on record."
                         )
 
+        # A direct answer to "do I currently hold X" -- see module
+        # docstring, source #3, for why this is surfaced this way.
+        if held_position is True:
+            facts.append(f"You currently hold a position in {symbol}.")
+        elif held_position is False and facts:
+            facts.append(f"You don't currently hold a position in {symbol} right now.")
+
         if not facts:
-            facts.append(
-                f"{symbol} is on your watchlist, but I don't have any evaluation history for it yet."
-                if on_watchlist else
-                f"I don't have any information on {symbol} in your portfolio or watchlist."
-            )
+            facts.append(f"I don't have any information on {symbol} in your portfolio or watchlist.")
 
         return CapabilityResult(
             agent=self.name, description=f"Reported on {symbol}",
