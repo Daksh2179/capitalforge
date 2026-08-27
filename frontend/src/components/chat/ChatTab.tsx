@@ -90,7 +90,34 @@ export function ChatTab() {
         )}
 
         {status === "updated_draft" && lastTranslateResult && (
-          <AppliedOperationsDiff operations={lastTranslateResult.applied_operations} />
+          <>
+            <AppliedOperationsDiff operations={lastTranslateResult.applied_operations} />
+            {(() => {
+              // agent_response is always populated; the backend falls
+              // back to exactly this same join when ResponseComposer
+              // had nothing further to add for this turn (see
+              // _build_translate_response in api/agent.py). Comparing
+              // against that same fallback is how we tell "there's
+              // nothing more to show" apart from "a safety note or a
+              // second Agent's answer rode along on this turn" --
+              // without it, the safety sentence for a total_capital_usd
+              // change (which only ever exists inside agent_response,
+              // never as a structured per-operation field) would never
+              // be visible anywhere.
+              const fallback = lastTranslateResult.applied_operations
+                .map((op) => op.description)
+                .join("; ");
+              const hasAdditionalContent =
+                lastTranslateResult.agent_response.trim() !== "" &&
+                lastTranslateResult.agent_response !== fallback;
+
+              return hasAdditionalContent ? (
+                <div className="rounded-md border border-border bg-muted/30 p-3 text-sm">
+                  {lastTranslateResult.agent_response}
+                </div>
+              ) : null;
+            })()}
+          </>
         )}
 
         {status === "error" && lastTranslateResult?.error_message && (

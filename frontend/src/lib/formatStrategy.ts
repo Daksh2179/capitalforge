@@ -6,6 +6,7 @@ import type {
   AssetRule,
   CapitalAllocation,
   ConditionGroup,
+  PortfolioRules,
   RuleCondition,
 } from "@/types/strategy";
 
@@ -106,5 +107,31 @@ export function formatAssetRule(rule: AssetRule): {
     sell: formatConditionGroup(rule.sell_conditions),
     sizing: formatCapitalAllocation(rule.capital_allocation),
     exit: exitParts.length > 0 ? exitParts.join(", ") : null,
+  };
+}
+
+export function formatPortfolioRules(rules: PortfolioRules): {
+  cashReserve: string;
+  maxAllocation: string;
+  maxOpenPositions: string;
+  tradingPool: string;
+} {
+  return {
+    cashReserve:
+      rules.cash_reserve_pct != null
+        ? `${rules.cash_reserve_pct}% held back`
+        : "Using engine default",
+    maxAllocation:
+      rules.max_allocation_pct != null
+        ? `${rules.max_allocation_pct}% max per position`
+        : "Using engine default",
+    maxOpenPositions:
+      rules.max_open_positions != null
+        ? `${rules.max_open_positions} positions max`
+        : "No limit set",
+    tradingPool:
+      rules.total_capital_usd != null
+        ? `$${rules.total_capital_usd.toLocaleString()} declared pool`
+        : "Uses full real account value",
   };
 }

@@ -1,15 +1,26 @@
 """Evaluation job: the orchestrator. Coordinates the pipeline for one
 Portfolio Strategy, one cycle.
 
-Collect signals -> execute SELLs -> refresh portfolio -> Opportunity
-Engine builds an Execution Plan -> execute the plan's selected BUYs ->
-one portfolio snapshot for the whole cycle.
+Sync pending orders -> Collect signals -> execute SELLs -> refresh
+portfolio -> Opportunity Engine builds an Execution Plan -> execute the
+plan's selected BUYs -> one portfolio snapshot for the whole cycle.
 
 SELLs are never ranked or contested for capital (see
 docs/decisions.md), so they execute immediately once collected,
 freeing cash the same cycle's BUY plan can then use. Contains no
 trading decisions, no indicator math, no risk logic, and no planning
 logic itself -- only calls the components that do, in the right order.
+
+Order sync: Alpaca is the source of truth for whether an order
+actually executed -- CapitalForge's own Order rows are only ever a
+cache of Alpaca's last-known state (see
+app/trading_engine/domain/order.py's TERMINAL_ORDER_STATUSES and
+app/services/trading_cycle_service.py's update_order_from_broker).
+Every cycle, before anything else, this strategy's still-pending
+orders (from THIS cycle or any past one -- no special-casing for old
+data) get re-checked against Alpaca and corrected in place. A failed
+Alpaca call for one order is logged and skipped, never guessed at,
+and never blocks the rest of the cycle.
 
 Smart pause: a PAUSED strategy still runs SELL/exit evaluation in
 full (existing positions stay protected by their stop loss/take
@@ -29,6 +40,7 @@ MarketDataProvider -> Rule Evaluator -> [SELL: Risk Manager -> Broker]
                                       -> Persistence
 """
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
@@ -49,6 +61,8 @@ from app.trading_engine.opportunity.types import ExecutionPlanEntry, Opportunity
 from app.trading_engine.risk.risk_limits import RiskLimits
 from app.trading_engine.rules.evaluator import evaluate_exit, evaluate_strategy
 from app.trading_engine.risk.risk_manager import RiskDecision, evaluate_risk
+
+logger = logging.getLogger(__name__)
 
 # V1 constraint (see docs/decisions.md): strategies operate only on
 # daily bars. This constant is the single place that assumption lives.
@@ -78,6 +92,30 @@ def build_risk_limits(portfolio_rules: PortfolioRules) -> RiskLimits:
     )
 
 
+def sync_pending_orders(db: Session, broker: Broker, strategy_id) -> None:
+    """Reuses the already-existing, already-tested broker.get_order()
+    -- this function is the only thing that was actually missing.
+    Scoped to every non-terminal Order under ANY version of this one
+    strategy, so a stale order from a past version gets corrected the
+    same way a brand-new one would, with no separate "historical"
+    code path. Alpaca is authoritative: update_order_from_broker
+    always overwrites local fields with what Alpaca currently reports,
+    never the reverse. A failed Alpaca call for one order is logged
+    and skipped -- that order's local state is left completely
+    untouched, and the rest of this strategy's pending orders still
+    get checked."""
+    for order in trading_cycle_service.list_non_terminal_orders(db, strategy_id=strategy_id):
+        try:
+            fresh = broker.get_order(order.alpaca_order_id)
+        except Exception:
+            logger.warning(
+                "sync_pending_orders: failed to fetch order %s from Alpaca",
+                order.alpaca_order_id, exc_info=True,
+            )
+            continue
+        trading_cycle_service.update_order_from_broker(db, order=order, fresh=fresh)
+
+
 def run_evaluation_cycle(
     db: Session,
     *,
@@ -86,6 +124,8 @@ def run_evaluation_cycle(
     market_data: MarketDataProvider,
     broker: Broker,
 ) -> None:
+    sync_pending_orders(db, broker, strategy.id)
+
     config = StrategyConfig.model_validate(strategy_version.config_json)
     risk_limits = build_risk_limits(config.portfolio_rules)
 

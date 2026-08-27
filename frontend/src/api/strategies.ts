@@ -10,6 +10,7 @@ import type {
 import type { DecisionLogResponse } from "@/types/decisionLog";
 import type { OrderResponse } from "@/types/order";
 import type { PortfolioSnapshotResponse } from "@/types/portfolioSnapshot";
+import type { BacktestStructuredResult } from "@/types/backtest";
 
 export function listStrategies(userId: string): Promise<StrategyResponse[]> {
   return apiRequest<StrategyResponse[]>("/strategies", {
@@ -71,4 +72,26 @@ export function getPortfolioSnapshots(
 
 export function getCurrentVersion(strategyId: string): Promise<StrategyVersionResponse> {
   return apiRequest<StrategyVersionResponse>(`/strategies/${strategyId}/current-version`);
+}
+
+// Add near the other functions, using the same apiRequest pattern
+export function pauseStrategy(strategyId: string): Promise<StrategyResponse> {
+  return apiRequest<StrategyResponse>(`/strategies/${strategyId}/pause`, {
+    method: "POST",
+  });
+}
+
+export function resumeStrategy(strategyId: string): Promise<StrategyResponse> {
+  return apiRequest<StrategyResponse>(`/strategies/${strategyId}/resume`, {
+    method: "POST",
+  });
+}
+
+export function getBacktest(
+  strategyId: string,
+  days?: number
+): Promise<BacktestStructuredResult> {
+  return apiRequest<BacktestStructuredResult>(`/strategies/${strategyId}/backtest`, {
+    searchParams: { days },
+  });
 }

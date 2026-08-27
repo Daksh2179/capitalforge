@@ -4,6 +4,7 @@ into our own domain types immediately — nothing Alpaca-specific leaves
 this module.
 """
 
+import logging
 import uuid
 
 from alpaca.trading.client import TradingClient
@@ -23,17 +24,27 @@ from app.trading_engine.domain.portfolio import Portfolio
 from app.trading_engine.domain.position import Position
 from app.trading_engine.execution.broker import Broker
 
+logger = logging.getLogger(__name__)
+
 _SIDE_TO_ALPACA = {
     OrderSide.BUY: AlpacaOrderSide.BUY,
     OrderSide.SELL: AlpacaOrderSide.SELL,
 }
 
 _STATUS_FROM_ALPACA: dict[AlpacaOrderStatus, OrderStatus] = {
+    # ACCEPTED is Alpaca's "received, not yet live at the exchange"
+    # acknowledgment -- confirmed via a real paper-account order
+    # (test_alpaca_broker.py caught this directly, not assumed from
+    # docs). Treated the same as NEW: both mean "alive, no fill yet,"
+    # and this app has no need to distinguish them.
+    AlpacaOrderStatus.ACCEPTED: OrderStatus.NEW,
     AlpacaOrderStatus.NEW: OrderStatus.NEW,
     AlpacaOrderStatus.PARTIALLY_FILLED: OrderStatus.PARTIALLY_FILLED,
     AlpacaOrderStatus.FILLED: OrderStatus.FILLED,
     AlpacaOrderStatus.CANCELED: OrderStatus.CANCELED,
     AlpacaOrderStatus.REJECTED: OrderStatus.REJECTED,
+    AlpacaOrderStatus.EXPIRED: OrderStatus.EXPIRED,
+    AlpacaOrderStatus.DONE_FOR_DAY: OrderStatus.DONE_FOR_DAY,
 }
 
 
@@ -140,13 +151,24 @@ class AlpacaBroker(Broker):
         else:
             raise ValueError(f"Unsupported Alpaca order type in response: {alpaca_type}")
 
+        status = _STATUS_FROM_ALPACA.get(raw_order.status)
+        if status is None:
+            # Never silently guess NEW for a status this app doesn't
+            # recognize -- log it plainly and mark it UNKNOWN instead,
+            # so a real change on Alpaca's side is visible, not hidden.
+            logger.warning(
+                "AlpacaBroker: unrecognized order status %r for order %s -- mapping to UNKNOWN",
+                raw_order.status, raw_order.id,
+            )
+            status = OrderStatus.UNKNOWN
+
         return Order(
             id=raw_order.id,
             symbol=raw_order.symbol,
             side=OrderSide.BUY if raw_order.side == AlpacaOrderSide.BUY else OrderSide.SELL,
             order_type=order_type,
             quantity=float(raw_order.qty),
-            status=_STATUS_FROM_ALPACA.get(raw_order.status, OrderStatus.NEW),
+            status=status,
             submitted_at=raw_order.submitted_at,
             limit_price=float(raw_order.limit_price) if raw_order.limit_price else None,
             stop_price=float(raw_order.stop_price) if raw_order.stop_price else None,

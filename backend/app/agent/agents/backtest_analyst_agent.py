@@ -30,10 +30,13 @@ TranslationService on every message routed here, including a plain
 "backtest my strategy", risks it misreading a non-edit request as an
 edit attempt.
 
-Starting capital defaults to the account's real current paper balance
-(from the latest PortfolioSnapshot), explicitly labeled as an assumed
-SIMULATION capital, never implied to be a real investment amount. Falls
-back to a stated, clearly-labeled default when no snapshot exists yet.
+Starting capital resolution (declared pool -> real balance -> labeled
+default) is shared with the structured GET /backtest REST endpoint via
+app.trading_engine.backtest.starting_capital.resolve_starting_cash, so
+the two paths can never silently drift on what "starting capital"
+means for a given strategy. Explicitly labeled as an assumed
+SIMULATION capital in every result, never implied to be a real
+investment amount.
 
 Time windows use a small, local, explicit keyword parser (matching
 DetailLevel's own discipline) -- not a general date-NLP system.
@@ -57,16 +60,16 @@ from app.agent.pipeline.types import AgentExecutionContext, ResolvedEntity
 from app.agent.translation.translation_result import TranslationStatus
 from app.agent.translation.translation_service import TranslationService
 from app.schemas.strategy import PortfolioRules, StrategyConfig
-from app.services import strategy_service, trading_cycle_service
+from app.services import strategy_service
 from app.trading_engine.backtest.benchmark import simulate_buy_and_hold
 from app.trading_engine.backtest.engine import run_backtest
 from app.trading_engine.backtest.metrics import max_drawdown_pct, total_return_pct, win_rate_pct
+from app.trading_engine.backtest.starting_capital import resolve_starting_cash
 from app.trading_engine.domain.timeframe import Timeframe
 from app.trading_engine.market_data.provider import MarketDataProvider
 from app.workers.evaluation_job import build_risk_limits
 
 _DEFAULT_WINDOW_DAYS = 90
-_DEFAULT_STARTING_CASH = 100_000.0
 
 _WINDOW_PATTERNS: list[tuple[str, int]] = [
     (r"(\d+)\s*day", 1),
@@ -108,7 +111,7 @@ class BacktestAnalystAgent:
         start = end - timedelta(days=_resolve_window_days(raw_message))
 
         current_config = self._load_confirmed_config(context.strategy_id) if context.strategy_id else None
-        starting_cash, capital_label = self._resolve_starting_cash(context.strategy_id, current_config)
+        starting_cash, capital_label = resolve_starting_cash(self._db, context.strategy_id, current_config)
 
         results: list[CapabilityResult] = []
 
@@ -157,22 +160,6 @@ class BacktestAnalystAgent:
             return StrategyConfig.model_validate(strategy.current_version.config_json)
         except Exception:
             return None
-
-    def _resolve_starting_cash(
-        self, strategy_id, current_config: StrategyConfig | None
-    ) -> tuple[float, str]:
-        """Priority: the strategy's own declared total_capital_usd pool
-        first (it's a deliberate statement of what this strategy is
-        allowed to manage, more relevant than the account's real total
-        balance for a backtest of THIS strategy), then the real
-        recorded account balance, then a labeled default."""
-        if current_config is not None and current_config.portfolio_rules.total_capital_usd is not None:
-            return current_config.portfolio_rules.total_capital_usd, "your strategy's declared trading pool"
-        if strategy_id is not None:
-            snapshots = trading_cycle_service.list_portfolio_snapshots(self._db, strategy_id=strategy_id, limit=1)
-            if snapshots:
-                return snapshots[0].total_value, "your current paper account balance"
-        return _DEFAULT_STARTING_CASH, "a default assumed simulation balance (no recorded account balance yet)"
 
     def _backtest_rule(
         self, rule, portfolio_rules: PortfolioRules, start: datetime, end: datetime,

@@ -11,8 +11,10 @@ from sqlalchemy.orm import Session
 from app.models.decision_log import DecisionLog
 from app.models.order import Order as OrderModel
 from app.models.portfolio_snapshot import PortfolioSnapshot
+from app.models.strategy import StrategyVersion
 from app.trading_engine.domain.market_bar import MarketBar
 from app.trading_engine.domain.order import Order as DomainOrder
+from app.trading_engine.domain.order import TERMINAL_ORDER_STATUSES
 from app.trading_engine.domain.portfolio import Portfolio
 from app.trading_engine.domain.signal import Signal
 from app.trading_engine.risk.risk_manager import RiskDecision
@@ -126,6 +128,33 @@ def list_orders(
         .all()
     )
 
+
+def list_non_terminal_orders(db: Session, *, strategy_id: uuid.UUID) -> list[OrderModel]:
+    """Orders still worth polling Alpaca about, across every version of
+    this strategy -- not just the current one. Deliberately scoped to
+    ONE strategy's own versions; a different strategy's orders (e.g. an
+    older, unrelated draft strategy) are out of scope here."""
+    return (
+        db.query(OrderModel)
+        .join(StrategyVersion, StrategyVersion.id == OrderModel.strategy_version_id)
+        .filter(StrategyVersion.strategy_id == strategy_id)
+        .filter(OrderModel.status.notin_(TERMINAL_ORDER_STATUSES))
+        .all()
+    )
+
+
+def update_order_from_broker(db: Session, *, order: OrderModel, fresh: DomainOrder) -> OrderModel:
+    """Alpaca is the source of truth -- this always overwrites local
+    fields with what Alpaca currently reports, never the reverse.
+    filled_quantity/filled_avg_price are Alpaca's cumulative values,
+    not deltas, so a plain overwrite is correct for partial fills too."""
+    order.status = fresh.status
+    order.filled_quantity = fresh.filled_quantity
+    order.filled_avg_price = fresh.filled_avg_price
+    order.filled_at = fresh.filled_at
+    db.commit()
+    db.refresh(order)
+    return order
 
 def list_portfolio_snapshots(
     db: Session, *, strategy_id: uuid.UUID, limit: int = 100

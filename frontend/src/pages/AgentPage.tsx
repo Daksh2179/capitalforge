@@ -3,8 +3,11 @@ import { ChatTab } from "@/components/chat/ChatTab";
 import { cn } from "@/lib/utils";
 import { OverviewTab } from "@/components/agent/OverviewTab";
 import { HistoryTab } from "@/components/agent/HistoryTab";
+import { PerformanceTab } from "@/components/agent/PerformanceTab";
+import { BacktestTab } from "@/components/agent/BacktestTab";
 
-const TABS = ["Overview", "Chat", "History"] as const;
+const TABS = ["Overview", "Chat", "History", "Performance", "Backtest"] as const;
+
 type Tab = (typeof TABS)[number];
 
 export function AgentPage() {
@@ -32,6 +35,9 @@ export function AgentPage() {
       {activeTab === "Chat" && <ChatTab />}
       {activeTab === "Overview" && <OverviewTab />}
       {activeTab === "History" && <HistoryTab />}
+      {activeTab === "Performance" && <PerformanceTab />}
+      {activeTab === "Performance" && <PerformanceTab />}
+      {activeTab === "Backtest" && <BacktestTab />}
     </div>
   );
 }

@@ -133,3 +133,115 @@ def test_log_decision_plan_outcome_defaults_to_none(db_session):
     )
 
     assert log.plan_outcome is None
+    
+def test_list_non_terminal_orders_excludes_terminal_statuses(db_session):
+    strategy = _create_strategy_version(db_session)
+    non_terminal = Order(
+        id=uuid.uuid4(), symbol="AAPL", side=OrderSide.BUY,
+        order_type=OrderType.MARKET, quantity=5.0, status=OrderStatus.NEW,
+        submitted_at=datetime.now(timezone.utc),
+    )
+    terminal = Order(
+        id=uuid.uuid4(), symbol="AAPL", side=OrderSide.BUY,
+        order_type=OrderType.MARKET, quantity=5.0, status=OrderStatus.FILLED,
+        submitted_at=datetime.now(timezone.utc),
+        filled_quantity=5.0, filled_avg_price=150.0, filled_at=datetime.now(timezone.utc),
+    )
+    trading_cycle_service.record_order(db_session, strategy_version_id=strategy.current_version_id, domain_order=non_terminal)
+    trading_cycle_service.record_order(db_session, strategy_version_id=strategy.current_version_id, domain_order=terminal)
+
+    results = trading_cycle_service.list_non_terminal_orders(db_session, strategy_id=strategy.id)
+
+    assert len(results) == 1
+    assert results[0].alpaca_order_id == str(non_terminal.id)
+
+
+def test_list_non_terminal_orders_spans_all_versions_of_strategy(db_session):
+    """The historical-GOOGL shape: a non-terminal order recorded under
+    an OLDER version of the strategy must still be found when queried
+    by strategy_id, not just the current version."""
+    strategy = _create_strategy_version(db_session)
+    old_version_id = strategy.current_version_id
+
+    new_version = strategy_service.create_new_version(
+        db_session, strategy=strategy,
+        config_json={"schema_version": 1, "symbol": "AAPL", "conditions": {"operator": "AND", "rules": []},
+                     "capital_allocation": {"type": "percentage_of_portfolio", "percentage": 5},
+                     "exit": {"stop_loss_pct": 3, "take_profit_pct": None}},
+        source="manual",
+    )
+
+    stale_order = Order(
+        id=uuid.uuid4(), symbol="GOOGL", side=OrderSide.BUY,
+        order_type=OrderType.MARKET, quantity=14.4, status=OrderStatus.NEW,
+        submitted_at=datetime.now(timezone.utc),
+    )
+    trading_cycle_service.record_order(db_session, strategy_version_id=old_version_id, domain_order=stale_order)
+
+    results = trading_cycle_service.list_non_terminal_orders(db_session, strategy_id=strategy.id)
+
+    assert len(results) == 1
+    assert results[0].alpaca_order_id == str(stale_order.id)
+    assert results[0].strategy_version_id == old_version_id
+    assert new_version.id != old_version_id  # sanity check the two versions really differ
+
+
+def test_update_order_from_broker_overwrites_fields_from_alpaca(db_session):
+    strategy = _create_strategy_version(db_session)
+    domain_order = Order(
+        id=uuid.uuid4(), symbol="AAPL", side=OrderSide.BUY,
+        order_type=OrderType.MARKET, quantity=5.0, status=OrderStatus.NEW,
+        submitted_at=datetime.now(timezone.utc),
+    )
+    order = trading_cycle_service.record_order(
+        db_session, strategy_version_id=strategy.current_version_id, domain_order=domain_order
+    )
+
+    fill_time = datetime.now(timezone.utc)
+    fresh = Order(
+        id=domain_order.id, symbol="AAPL", side=OrderSide.BUY,
+        order_type=OrderType.MARKET, quantity=5.0, status=OrderStatus.FILLED,
+        submitted_at=domain_order.submitted_at,
+        filled_quantity=5.0, filled_avg_price=152.34, filled_at=fill_time,
+    )
+
+    updated = trading_cycle_service.update_order_from_broker(db_session, order=order, fresh=fresh)
+
+    assert updated.status == OrderStatus.FILLED
+    assert updated.filled_quantity == 5.0
+    assert updated.filled_avg_price == 152.34
+    assert updated.filled_at == fill_time
+
+
+def test_update_order_from_broker_handles_partial_fill_as_cumulative_overwrite(db_session):
+    strategy = _create_strategy_version(db_session)
+    domain_order = Order(
+        id=uuid.uuid4(), symbol="AAPL", side=OrderSide.BUY,
+        order_type=OrderType.MARKET, quantity=10.0, status=OrderStatus.NEW,
+        submitted_at=datetime.now(timezone.utc),
+    )
+    order = trading_cycle_service.record_order(
+        db_session, strategy_version_id=strategy.current_version_id, domain_order=domain_order
+    )
+
+    # First partial fill
+    first_check = Order(
+        id=domain_order.id, symbol="AAPL", side=OrderSide.BUY,
+        order_type=OrderType.MARKET, quantity=10.0, status=OrderStatus.PARTIALLY_FILLED,
+        submitted_at=domain_order.submitted_at, filled_quantity=4.0, filled_avg_price=150.0,
+    )
+    trading_cycle_service.update_order_from_broker(db_session, order=order, fresh=first_check)
+    assert order.filled_quantity == 4.0
+
+    # Second check: Alpaca reports the CUMULATIVE total, not a delta --
+    # a correct sync overwrites, it never adds 6.0 + 4.0.
+    second_check = Order(
+        id=domain_order.id, symbol="AAPL", side=OrderSide.BUY,
+        order_type=OrderType.MARKET, quantity=10.0, status=OrderStatus.FILLED,
+        submitted_at=domain_order.submitted_at, filled_quantity=10.0, filled_avg_price=150.8,
+        filled_at=datetime.now(timezone.utc),
+    )
+    trading_cycle_service.update_order_from_broker(db_session, order=order, fresh=second_check)
+
+    assert order.filled_quantity == 10.0
+    assert order.status == OrderStatus.FILLED
